@@ -1,6 +1,7 @@
 pub enum Type {
   Arrow(Type, Type)
   Atom(String) // only introduced as lambda arguments to prove implications
+  Tuple(Array[Type])
   Bool
 } derive(Eq)
 
@@ -11,6 +12,7 @@ pub enum Expr {
   Abs(String, Type?, Expr)
   App(Expr, Expr)
   Ann(Expr, Type)
+  Tuple(Array[Expr])
   Const(Const)
 }
 
@@ -21,24 +23,28 @@ pub impl Eq for Expr with equal(self: Expr, other: Expr) -> Bool {
     (App(lhs1, rhs1), App(lhs2, rhs2)) => lhs1 == lhs2 && rhs1 == rhs2
     (Ann(e1, t1), Ann(e2, t2)) => t1 == t2 && e1 == e2
     (Const(c1), Const(c2)) => c1 == c2
+    (Tuple(xs), Tuple(ys)) => xs == ys
     _ => false
   }
 }
-
 
 pub enum Const {
   Bool(Bool)
 } derive(Eq)
 
-
 pub impl Show for Type with output(self: Type, logger: &Logger) {
-  let str = match self {
-    Bool => "Bool"
-    Atom(a) => a
-    Arrow(t0, t1) => "\{t0} -> \{t1}"
+  match self {
+    Bool => logger.write_string("Bool")
+    Atom(a) => logger.write_string(a)
+    Arrow(t0, t1) => {
+      logger.write_object(t0)
+      logger.write_string(" -> ")
+      logger.write_object(t1)
+    }
+    Tuple(tys) => {
+      logger.write_iter(tys.iter(), prefix="(", suffix=")", sep=", ")
+    }
   }
-
-  logger.write_string(str)
 }
 
 pub impl Show for Const with output(self: Const, logger: &Logger) {
@@ -64,12 +70,12 @@ fn Expr::fmt(self: Expr, bindings~: Array[String], depth~: Int, logger: &Logger)
     }
     Abs(x, ann, body) => {
       bindings.push(x)
+      defer { let _ = bindings.unsafe_pop() }
       logger.write_string("fun ")
       logger.write_string(bindings[depth])
       if ann is Some(ty) { logger.write_string(": \{ty}") }
       logger.write_string(" => ")
       body.fmt(bindings~, depth=depth + 1, logger)
-      let _ = bindings.unsafe_pop()
     }
     Ann(e, ty) => {
       logger.write_char('(')
@@ -77,6 +83,9 @@ fn Expr::fmt(self: Expr, bindings~: Array[String], depth~: Int, logger: &Logger)
       logger.write_string(": ")
       logger.write_object(ty)
       logger.write_char(')')
+    }
+    Tuple(elems) => {
+      logger.write_iter(elems.iter(), prefix="(", suffix=")", sep=", ")
     }
   }
 }

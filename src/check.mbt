@@ -2,10 +2,12 @@
 
 pub suberror TypeCheckError {
   ExpectedArrowTypeForAbs(expr~: Expr, ty~: Type)
+  ExpectedTupleType(expr~: Expr, ty~: Type)
   InconsistentAbsAnnotation(expr~: Expr, ann~: Type, expected~: Type)
   LhsOfApplicationNotAFunction(expr~: Expr)
   TypeMismatch(expr~: Expr, expected~: Type, got~: Type)
   MissingLambdaArgAnnotation(expr~: Expr)
+  TupleSizeMismatch(expr~: Expr, expected~: Int, got~: Int)
   UnboundVariable(DeBruijnIndex)
 } derive(Show)
 
@@ -54,11 +56,15 @@ pub fn TypeContext::infer(self: TypeContext, expr: Expr) -> Type raise TypeCheck
     }
     Abs(_, Some(arg_ty), body) => {
       self.push_binding(arg_ty)
+      defer self.pop_binding()
       let body_ty = self.infer(body)
-      self.pop_binding()
       Arrow(arg_ty, body_ty)
     }
     Abs(_, None, _) => raise MissingLambdaArgAnnotation(expr~)  
+    Tuple(elems) => {
+      let elem_tys = elems.map(e => self.infer(e))
+      Tuple(elem_tys)
+    }
   }
 }
 
@@ -76,6 +82,20 @@ pub fn TypeContext::check(self: TypeContext, expr: Expr, ty: Type) -> Unit raise
           self.pop_binding()
         }
         _ => raise ExpectedArrowTypeForAbs(expr~, ty~)
+      }
+    }
+    Tuple(elems) => {
+      match ty {
+        Tuple(tys) => {
+          if elems.length() != tys.length() {
+            raise TupleSizeMismatch(expr~, expected=tys.length(), got=elems.length())
+          }
+
+          for expr, ty in elems.zip_to_iter2(tys) {
+            self.check(expr, ty)
+          }
+        }
+        _ => raise ExpectedTupleType(expr~, ty~)
       }
     }
     _ => {
@@ -112,6 +132,9 @@ test "check" {
 
   assert_type("true", "Bool")
   assert_type("false", "Bool")
+  assert_type("(true, false)", "(Bool, Bool)")
+  assert_type("(fun x: A => x, true)", "(A -> A, Bool)")
+  assert_type("((fun x => x, true): (A -> A, Bool))", "(A -> A, Bool)")
   assert_type("fun x: P => x", "P -> P")
   assert_type("fun x => fun y => x", "P -> Q -> P")
   assert_type("fun x: P => fun y => x", "P -> Q -> P")

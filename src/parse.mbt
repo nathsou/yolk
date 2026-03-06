@@ -6,6 +6,7 @@ pub enum Token {
   Arrow
   Fun
   Colon
+  Comma
   True
   False
   Var(String)
@@ -110,6 +111,7 @@ fn Lexer::next(self: Lexer) -> LexerResult {
     '(' => { self.advance(); Yay(Lparen) }
     ')' => { self.advance(); Yay(Rparen) }
     ':' => { self.advance(); Yay(Colon) }
+    ',' => { self.advance(); Yay(Comma) }
     '=' => {
       self.advance()
       if self.consumes('>') {
@@ -238,6 +240,7 @@ fn Parser::parse_abs(self: Parser) -> Expr raise ParserError {
   self.expect(Fun)
   let v = self.expect_var()
   self.variables.push(v)
+  defer { let _ = self.variables.unsafe_pop() }
   
   let ty = if self.matches(Colon) {
     self.advance()
@@ -248,7 +251,6 @@ fn Parser::parse_abs(self: Parser) -> Expr raise ParserError {
 
   self.expect(FatArrow)
   let body = self.parse_expr()
-  let _ = self.variables.unsafe_pop()
   Expr::Abs(v, ty, body) 
 }
 
@@ -288,6 +290,17 @@ fn Parser::parse_atom(self: Parser) -> Expr raise ParserError {
           self.expect(Rparen)
           Expr::Ann(expr, ty)
         }
+        Comma => {
+          let elems = [expr]
+
+          while self.matches(Comma) {
+            self.advance()
+            elems.push(self.parse_expr())
+          }
+
+          self.expect(Rparen)
+          Tuple(elems)
+        }
         Rparen => { self.advance(); expr }
         tok => raise Expected(expected=Rparen, received=tok)
       }
@@ -319,8 +332,23 @@ fn Parser::parse_base_type(self: Parser) -> Type raise ParserError {
     Lparen => {
       self.advance()
       let ty = self.parse_type()
-      self.expect(Rparen)
-      ty
+
+      match self.peek() {
+        Comma => {
+          let tys = [ty]
+
+          while self.matches(Comma) {
+            self.advance()
+            tys.push(self.parse_type())
+          }
+
+          self.expect(Rparen)
+
+          Tuple(tys)
+        } 
+        Rparen => { self.advance(); ty }
+        tok => raise UnexpectedToken(tok)
+      }
     }
     tok => raise UnexpectedToken(tok)
   }
@@ -368,6 +396,9 @@ test "parser" {
   expect_type("Bool", Bool)
   expect_type("Bool -> Bool", Arrow(Bool, Bool))
   expect_type("Bool -> Bool -> Bool", Arrow(Bool, Arrow(Bool, Bool)))
+  expect_type("(Bool, Bool)", Tuple([Bool, Bool]))
+  expect_type("(A, B, C, D, E, F)", Tuple([Atom("A"), Atom("B"), Atom("C"), Atom("D"), Atom("E"), Atom("F")]))
+  expect_type("(A, B, (C, (D, E)))", Tuple([Atom("A"), Atom("B"), Tuple([Atom("C"), Tuple([Atom("D"), Atom("E")])])]))
   expect_type("A", Atom("A"))
   expect_type("P", Atom("P"))
   expect_type("Q71", Atom("Q71"))
@@ -375,10 +406,14 @@ test "parser" {
     "P -> Q -> (P -> Bool -> R)",
     Arrow(Atom("P"), Arrow(Atom("Q"), Arrow(Atom("P"), Arrow(Bool, Atom("R")))))
   )
+  expect_type("(A -> B, (Bool -> Q, Bool))", Tuple([Arrow(Atom("A"), Atom("B")), Tuple([Arrow(Bool, Atom("Q")), Bool])]))
 
   // exprs
   expect_expr("true", Const(Bool(true)))
   expect_expr("false", Const(Bool(false)))
+  expect_expr("(true, false)", Tuple([Const(Bool(true)), Const(Bool(false))]))
+  expect_expr("(true, (false, false))", Tuple([Const(Bool(true)), Tuple([Const(Bool(false)), Const(Bool(false))])]))
+  expect_expr("(true, false, false)", Tuple([Const(Bool(true)), Const(Bool(false)), Const(Bool(false))]))
   expect_expr("fun x => x", Abs("x", None, Var(0)))
   expect_expr("fun x => fun y => x", Abs("x", None, Abs("y", None, Var(1))))
   expect_expr("fun x => fun y => y", Abs("x", None, Abs("y", None, Var(0))))
@@ -403,6 +438,7 @@ test "parser" {
     "fun f => (fun x => f (x x)) (fun x => f (x x))",
     Abs("f", None, App(Abs("x", None, App(Var(1), App(Var(0), Var(0)))), Abs("x", None, App(Var(1), App(Var(0), Var(0))))))
   )
+  expect_expr("fun x => fun y => (x, y)", Abs("x", None, Abs("y", None, Tuple([Var(1), Var(0)]))))
   
   expect_expr_fail("x", UnboundVar("x"))
   expect_expr_fail("fun x => y", UnboundVar("y"))
