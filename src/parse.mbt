@@ -217,7 +217,17 @@ fn Parser::expect_var(self: Parser) -> String raise ParserError {
   }
 }
 
-pub fn Parser::parse_expr(self: Parser) -> Expr raise ParserError {
+pub fn Parser::parse(self: Parser) -> Expr raise ParserError {
+  let expr = self.parse_expr()
+
+  if self.index != self.tokens.length() {
+    raise UnexpectedToken(self.tokens[self.index])
+  }
+
+  expr
+}
+
+fn Parser::parse_expr(self: Parser) -> Expr raise ParserError {
   match self.peek() {
     Fun => self.parse_abs()
     _ => self.parse_app()
@@ -239,7 +249,7 @@ fn Parser::parse_abs(self: Parser) -> Expr raise ParserError {
   self.expect(FatArrow)
   let body = self.parse_expr()
   let _ = self.variables.unsafe_pop()
-  Expr::Abs(ty~, body~) 
+  Expr::Abs(ty, body) 
 }
 
 fn Parser::parse_app(self: Parser) -> Expr raise ParserError {
@@ -259,7 +269,7 @@ fn Parser::parse_atom(self: Parser) -> Expr raise ParserError {
 
       for i = self.variables.length() - 1; i >= 0; i = i - 1 {
         if self.variables[i] == v {
-          return Expr::Var((self.variables.length() - 1 - i).reinterpret_as_uint())
+          return Expr::Var(self.variables.length() - 1 - i)
         }
       }
 
@@ -275,7 +285,8 @@ fn Parser::parse_atom(self: Parser) -> Expr raise ParserError {
         Colon => {
           self.advance()
           let ty = self.parse_type()
-          Expr::Ann(expr, ty)     
+          self.expect(Rparen)
+          Expr::Ann(expr, ty)
         }
         Rparen => { self.advance(); expr }
         tok => raise Expected(expected=Rparen, received=tok)
@@ -315,17 +326,20 @@ fn Parser::parse_base_type(self: Parser) -> Type raise ParserError {
   }
 }
 
+pub fn parse(input: String) -> Expr raise {
+  let tokens = Lexer::new(input).tokenize()
+  Parser::new(tokens).parse()
+}
+
 test "parser" {
   fn expect_expr(input: String, expected_expr: Expr) raise {
-    let tokens = Lexer::new(input).tokenize()
-    let actual_expr = Parser::new(tokens).parse_expr()
-    assert_eq(actual_expr, expected_expr)
+    assert_eq(parse(input), expected_expr)
   }
 
   fn expect_expr_fail(input: String, expected_err: ParserError) raise {
     let tokens = Lexer::new(input).tokenize()
 
-    try Parser::new(tokens).parse_expr() catch {
+    try Parser::new(tokens).parse() catch {
       err => assert_eq(err, expected_err)
     } noraise {
       expr => fail("Expected error '\{expected_err}', got '\{expr}'")
@@ -353,27 +367,32 @@ test "parser" {
   // exprs
   expect_expr("true", Const(Bool(true)))
   expect_expr("false", Const(Bool(false)))
-  expect_expr("fun x => x", Abs(ty=None, body=Var(0)))
-  expect_expr("fun x => fun y => x", Abs(ty=None, body=Abs(ty=None, body=Var(1))))
-  expect_expr("fun x => fun y => y", Abs(ty=None, body=Abs(ty=None, body=Var(0))))
-  expect_expr("fun x => fun y => fun z => x", Abs(ty=None, body=Abs(ty=None, body=Abs(ty=None, body=Var(2)))))
-  expect_expr("fun x => fun y => fun z => y", Abs(ty=None, body=Abs(ty=None, body=Abs(ty=None, body=Var(1)))))
-  expect_expr("fun x => fun y => fun z => z", Abs(ty=None, body=Abs(ty=None, body=Abs(ty=None, body=Var(0)))))
-  expect_expr("(fun x => x) true", App(Abs(ty=None, body=Var(0)), Const(Bool(true))))
-  expect_expr("(fun x => x) (fun x => x)", App(Abs(ty=None, body=Var(0)), Abs(ty=None, body=Var(0))))
-  expect_expr("(fun x => x) (fun y => y)", App(Abs(ty=None, body=Var(0)), Abs(ty=None, body=Var(0))))
+  expect_expr("fun x => x", Abs(None, Var(0)))
+  expect_expr("fun x => fun y => x", Abs(None, Abs(None, Var(1))))
+  expect_expr("fun x => fun y => y", Abs(None, Abs(None, Var(0))))
+  expect_expr("fun x => fun y => fun z => x", Abs(None, Abs(None, Abs(None, Var(2)))))
+  expect_expr("fun x => fun y => fun z => y", Abs(None, Abs(None, Abs(None, Var(1)))))
+  expect_expr("fun x => fun y => fun z => z", Abs(None, Abs(None, Abs(None, Var(0)))))
+  expect_expr("(fun x => x) true", App(Abs(None, Var(0)), Const(Bool(true))))
+  expect_expr("(fun x => x) (fun x => x)", App(Abs(None, Var(0)), Abs(None, Var(0))))
+  expect_expr("(fun x => x) (fun y => y)", App(Abs(None, Var(0)), Abs(None, Var(0))))
   expect_expr("(true: Bool)", Ann(Const(Bool(true)), Bool))
-  expect_expr("(fun x => x: Bool -> Bool)", Ann(Abs(ty=None, body=Var(0)), Arrow(Bool, Bool)))
+  expect_expr("(fun x => x: Bool -> Bool)", Ann(Abs(None, Var(0)), Arrow(Bool, Bool)))
   expect_expr(
     "(fun x => fun y => x: P -> Q -> P)",
-    Ann(Abs(ty=None, body=Abs(ty=None, body=Var(1))), Arrow(Arrow(Atom("P"), Atom("Q")), Atom("P")))
+    Ann(Abs(None, Abs(None, Var(1))), Arrow(Arrow(Atom("P"), Atom("Q")), Atom("P")))
   )
-  expect_expr("fun x: Bool => x", Abs(ty=Some(Bool), body=Var(0)))
+  expect_expr("fun x: Bool => x", Abs(Some(Bool), Var(0)))
   expect_expr(
     "fun p: P => fun q: Q => fun f: P -> Q -> R => (f p) q",
-    Abs(ty=Some(Atom("P")), body=Abs(ty=Some(Atom("Q")), body=Abs(ty=Some(Arrow(Arrow(Atom("P"), Atom("Q")), Atom("R"))), body=App(App(Var(0), Var(2)), Var(1))))) 
+    Abs(Some(Atom("P")), Abs(Some(Atom("Q")), Abs(Some(Arrow(Arrow(Atom("P"), Atom("Q")), Atom("R"))), App(App(Var(0), Var(2)), Var(1))))) 
+  )
+  expect_expr(
+    "fun f => (fun x => f (x x)) (fun x => f (x x))",
+    Abs(None, App(Abs(None, App(Var(1), App(Var(0), Var(0)))), Abs(None, App(Var(1), App(Var(0), Var(0))))))
   )
   
   expect_expr_fail("x", UnboundVar("x"))
   expect_expr_fail("fun x => y", UnboundVar("y"))
+  expect_expr_fail("true)", UnexpectedToken(Rparen))
 }

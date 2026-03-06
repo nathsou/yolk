@@ -4,11 +4,11 @@ pub enum Type {
   Bool
 } derive(Show, Eq)
 
-type DeBruijnIndex = UInt
+type DeBruijnIndex = Int
 
 pub enum Expr {
   Var(DeBruijnIndex)
-  Abs(ty~ : Type?, body~ : Expr)
+  Abs(Type?, Expr)
   App(Expr, Expr)
   Ann(Expr, Type)
   Const(Const)
