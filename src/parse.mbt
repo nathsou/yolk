@@ -301,15 +301,15 @@ fn Parser::parse_type(self: Parser) -> Type raise ParserError {
 }
 
 fn Parser::parse_arrow_type(self: Parser) -> Type raise ParserError {
-  let mut lhs = self.parse_base_type()
+  let lhs = self.parse_base_type()
 
-  while self.matches(Arrow) {
+  if self.matches(Arrow) {
     self.advance()
-    let rhs = self.parse_base_type()
-    lhs = Type::Arrow(lhs, rhs)
+    let rhs = self.parse_arrow_type()
+    Arrow(lhs, rhs) 
+  } else {
+    lhs
   }
-
-  lhs
 }
 
 fn Parser::parse_base_type(self: Parser) -> Type raise ParserError {
@@ -329,6 +329,18 @@ fn Parser::parse_base_type(self: Parser) -> Type raise ParserError {
 pub fn parse(input: String) -> Expr raise {
   let tokens = Lexer::new(input).tokenize()
   Parser::new(tokens).parse()
+}
+
+pub fn parse_type(input: String) -> Type raise {
+  let tokens = Lexer::new(input).tokenize()
+  let parser = Parser::new(tokens)
+  let ty = parser.parse_type()
+
+  if parser.index != parser.tokens.length() {
+    raise UnexpectedToken(parser.tokens[parser.index])
+  }
+
+  ty
 }
 
 test "parser" {
@@ -355,13 +367,13 @@ test "parser" {
   // types
   expect_type("Bool", Bool)
   expect_type("Bool -> Bool", Arrow(Bool, Bool))
-  expect_type("Bool -> Bool -> Bool", Arrow(Arrow(Bool, Bool), Bool))
+  expect_type("Bool -> Bool -> Bool", Arrow(Bool, Arrow(Bool, Bool)))
   expect_type("A", Atom("A"))
   expect_type("P", Atom("P"))
   expect_type("Q71", Atom("Q71"))
   expect_type(
     "P -> Q -> (P -> Bool -> R)",
-    Arrow(Arrow(Atom("P"), Atom("Q")), Arrow(Arrow(Atom("P"), Bool), Atom("R"))),
+    Arrow(Atom("P"), Arrow(Atom("Q"), Arrow(Atom("P"), Arrow(Bool, Atom("R")))))
   )
 
   // exprs
@@ -380,12 +392,12 @@ test "parser" {
   expect_expr("(fun x => x: Bool -> Bool)", Ann(Abs(None, Var(0)), Arrow(Bool, Bool)))
   expect_expr(
     "(fun x => fun y => x: P -> Q -> P)",
-    Ann(Abs(None, Abs(None, Var(1))), Arrow(Arrow(Atom("P"), Atom("Q")), Atom("P")))
+    Ann(Abs(None, Abs(None, Var(1))), Arrow(Atom("P"), Arrow(Atom("Q"), Atom("P"))))
   )
   expect_expr("fun x: Bool => x", Abs(Some(Bool), Var(0)))
   expect_expr(
     "fun p: P => fun q: Q => fun f: P -> Q -> R => (f p) q",
-    Abs(Some(Atom("P")), Abs(Some(Atom("Q")), Abs(Some(Arrow(Arrow(Atom("P"), Atom("Q")), Atom("R"))), App(App(Var(0), Var(2)), Var(1))))) 
+    Abs(Some(Atom("P")), Abs(Some(Atom("Q")), Abs(Some(Arrow(Atom("P"), Arrow(Atom("Q"), Atom("R")))), App(App(Var(0), Var(2)), Var(1)))))
   )
   expect_expr(
     "fun f => (fun x => f (x x)) (fun x => f (x x))",

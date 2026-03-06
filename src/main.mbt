@@ -1,9 +1,6 @@
 fn main {
-  let source = "(fun x => x) true"
-  let lexer = Lexer::new(source)
-  let tokens = try! lexer.tokenize()
-  let parser = Parser::new(tokens)
-  let expr = try! parser.parse()
-  let res = eval(expr)
-  println(res)
+  let expr = try! parse("(fun x: Bool => x)")
+  let ctx = TypeContext::new()
+  let ty = try? ctx.infer(expr)
+  println(ty)
 }
