@@ -7,8 +7,10 @@ pub enum Token {
   Fun
   Colon
   Comma
+  Dot
   True
   False
+  Nat(UInt)
   Var(String)
   Bool
   Atom(String)
@@ -34,12 +36,17 @@ fn Lexer::advance(self: Lexer) -> Unit {
 fn is_alpha(c: Char) -> Bool {
   (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
 }
-fn is_decimal_digit(c: Char) -> Bool {
+
+fn is_digit(c: Char) -> Bool {
   c >= '0' && c <= '9'
-} 
+}
+
+fn parse_digit(c: Char) -> UInt {
+  c.to_uint() - 48
+}
 
 fn is_alphanumeric(c: Char) -> Bool {
-  is_alpha(c) || is_decimal_digit(c)
+  is_alpha(c) || is_digit(c)
 }
 
 fn Lexer::peek(self: Lexer) -> Char {
@@ -112,6 +119,7 @@ fn Lexer::next(self: Lexer) -> LexerResult {
     ')' => { self.advance(); Yay(Rparen) }
     ':' => { self.advance(); Yay(Colon) }
     ',' => { self.advance(); Yay(Comma) }
+    '.' => { self.advance(); Yay(Dot) }
     '=' => {
       self.advance()
       if self.consumes('>') {
@@ -145,6 +153,17 @@ fn Lexer::next(self: Lexer) -> LexerResult {
             }
           }
         }
+      } else if is_digit(char) {
+          let mut n = parse_digit(char)
+          self.advance()
+
+          while self.index < self.input.length() && is_digit(self.input[self.index]) {
+            n *= 10
+            n += parse_digit(self.input[self.index])
+            self.advance()
+          }
+
+          Yay(Nat(n))
       } else {
         Grr(UnexpectedChar(char~, index=self.index))
       }
@@ -178,6 +197,7 @@ pub suberror ParserError {
   UnboundVar(String)
   Message(String)
   UnexpectedEOF
+  ExpectedNat(Token)
 } derive(Show, Eq)
 
 pub fn Parser::new(tokens: Array[Token]) -> Parser {
@@ -255,10 +275,28 @@ fn Parser::parse_abs(self: Parser) -> Expr raise ParserError {
 }
 
 fn Parser::parse_app(self: Parser) -> Expr raise ParserError {
+  let mut lhs = self.parse_proj()
+
+  while (try? self.parse_proj()) is Ok(rhs) {
+    lhs = Expr::App(lhs, rhs)
+  }
+
+  lhs
+}
+
+fn Parser::parse_proj(self: Parser) -> Expr raise ParserError {
   let mut lhs = self.parse_atom()
 
-  while (try? self.parse_atom()) is Ok(rhs) {
-    lhs = Expr::App(lhs, rhs)
+  while self.matches(Dot) {
+    self.advance()
+
+    match self.peek() {
+      Nat(idx) => {
+        self.advance()
+        lhs = Proj(lhs, idx)
+      }
+      tok => raise ExpectedNat(tok)
+    }
   }
 
   lhs
@@ -414,6 +452,8 @@ test "parser" {
   expect_expr("(true, false)", Tuple([Const(Bool(true)), Const(Bool(false))]))
   expect_expr("(true, (false, false))", Tuple([Const(Bool(true)), Tuple([Const(Bool(false)), Const(Bool(false))])]))
   expect_expr("(true, false, false)", Tuple([Const(Bool(true)), Const(Bool(false)), Const(Bool(false))]))
+  expect_expr("(true, false).0", Proj(Tuple([Const(Bool(true)), Const(Bool(false))]), 0))
+  expect_expr("(true, (false, true)).1.0", Proj(Proj(Tuple([Const(Bool(true)), Tuple([Const(Bool(false)), Const(Bool(true))])]), 1), 0))
   expect_expr("fun x => x", Abs("x", None, Var(0)))
   expect_expr("fun x => fun y => x", Abs("x", None, Abs("y", None, Var(1))))
   expect_expr("fun x => fun y => y", Abs("x", None, Abs("y", None, Var(0))))

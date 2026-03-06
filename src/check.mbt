@@ -8,6 +8,7 @@ pub suberror TypeCheckError {
   TypeMismatch(expr~: Expr, expected~: Type, got~: Type)
   MissingLambdaArgAnnotation(expr~: Expr)
   TupleSizeMismatch(expr~: Expr, expected~: Int, got~: Int)
+  ProjOutOfBounds(expr~: Expr, size~: Int)
   UnboundVariable(DeBruijnIndex)
 } derive(Show)
 
@@ -65,6 +66,19 @@ pub fn TypeContext::infer(self: TypeContext, expr: Expr) -> Type raise TypeCheck
       let elem_tys = elems.map(e => self.infer(e))
       Tuple(elem_tys)
     }
+    Proj(lhs, idx) => {
+      let lhs_ty = self.infer(lhs)
+      if lhs_ty is Tuple(tys) {
+        let idx_int = idx.reinterpret_as_int()
+        if idx_int >= tys.length() {
+          raise ProjOutOfBounds(expr~, size=tys.length())
+        }
+        
+        tys[idx_int]
+      } else {
+        raise ExpectedTupleType(expr~, ty=lhs_ty)
+      }
+    }
   }
 }
 
@@ -78,8 +92,8 @@ pub fn TypeContext::check(self: TypeContext, expr: Expr, ty: Type) -> Unit raise
           }
 
           self.push_binding(t0)
+          defer self.pop_binding()
           self.check(body, t1)
-          self.pop_binding()
         }
         _ => raise ExpectedArrowTypeForAbs(expr~, ty~)
       }
@@ -135,6 +149,11 @@ test "check" {
   assert_type("(true, false)", "(Bool, Bool)")
   assert_type("(fun x: A => x, true)", "(A -> A, Bool)")
   assert_type("((fun x => x, true): (A -> A, Bool))", "(A -> A, Bool)")
+  assert_type("(true, fun x: A => x).0", "Bool")
+  assert_type("(true, true, true, true).3", "Bool")
+  assert_type("(true, fun x: A => x).1", "A -> A")
+  assert_type("(true, fun x: (Bool, (Bool, Bool)) => x.1).1 (true, (false, false))", "(Bool, Bool)")
+  assert_type("((fun x => x.0): (A, B) -> A)", "(A, B) -> A")
   assert_type("fun x: P => x", "P -> P")
   assert_type("fun x => fun y => x", "P -> Q -> P")
   assert_type("fun x: P => fun y => x", "P -> Q -> P")

@@ -1,5 +1,9 @@
 
-pub fn eval(expr: Expr) -> Expr {
+pub suberror EvalError {
+  ExpectedTupleInProj(Expr)
+}
+
+pub fn eval(expr: Expr) -> Expr raise EvalError {
   let mut res = expr
 
   while step(res) is next && next != res {
@@ -9,14 +13,22 @@ pub fn eval(expr: Expr) -> Expr {
   res
 }
 
-fn step(expr: Expr) -> Expr {
+fn step(expr: Expr) -> Expr raise EvalError {
   match expr {
     App(Abs(_, _, body), arg) => shift(subst(body, 0, shift(arg, 0, 1)), 0, -1)
     App(lhs, rhs) => App(eval(lhs), eval(rhs))
-    Abs(x, ty, body) => Abs(x, ty, eval(body))
     Ann(e, _) => eval(e)
     Tuple(elems) => Tuple(elems.map(eval))
-    Var(_) | Const(_) => expr
+    Proj(lhs, idx) => {
+      let tuple = eval(lhs)
+      if tuple is Tuple(elems) {
+        elems[idx.reinterpret_as_int()]
+      } else {
+        // type checking should guarantee that lhs is a tuple
+        raise ExpectedTupleInProj(expr)
+      }
+    }
+    Abs(_) | Var(_) | Const(_) => expr
   }
 }
 
@@ -28,6 +40,7 @@ fn subst(expr: Expr, idx: DeBruijnIndex, s: Expr) -> Expr {
     App(lhs, rhs) => App(subst(lhs, idx, s), subst(rhs, idx, s))
     Ann(e, ty) => Ann(subst(e, idx, s), ty)
     Tuple(elems) => Tuple(elems.map(e => subst(e, idx, s)))
+    Proj(lhs, i) => Proj(subst(lhs, idx, s), i)
   }
 }
 
@@ -37,6 +50,7 @@ fn shift(expr: Expr, depth: Int, amount: Int) -> Expr {
     App(f, arg) => App(shift(f, depth, amount), shift(arg, depth, amount))
     Ann(e, ty) => Ann(shift(e, depth, amount), ty)
     Tuple(elems) => Tuple(elems.map(e => shift(e, depth, amount)))
+    Proj(lhs, idx) => Proj(shift(lhs, depth, amount), idx)
     Var(n) if n >= depth => Var(n + amount) // free variable
     Var(_) | Const(_) => expr
   }
@@ -51,6 +65,9 @@ test "eval" {
   assert_eval("false", "false")
   assert_eval("(true: Bool)", "true")
   assert_eval("(true, false)", "(true, false)")
+  assert_eval("(true, false).0", "true")
+  assert_eval("(true, false).1", "false")
+  assert_eval("(true, fun x => x).1 true", "true")
   assert_eval("fun x => x", "fun y => y")
   assert_eval("(fun x => x) true", "true")
   assert_eval("(fun x => fun y => x) true false", "true")

@@ -13,6 +13,7 @@ pub enum Expr {
   App(Expr, Expr)
   Ann(Expr, Type)
   Tuple(Array[Expr])
+  Proj(Expr, UInt)
   Const(Const)
 }
 
@@ -24,6 +25,7 @@ pub impl Eq for Expr with equal(self: Expr, other: Expr) -> Bool {
     (Ann(e1, t1), Ann(e2, t2)) => t1 == t2 && e1 == e2
     (Const(c1), Const(c2)) => c1 == c2
     (Tuple(xs), Tuple(ys)) => xs == ys
+    (Proj(t1, idx1), Proj(t2, idx2)) => idx1 == idx2 && t1 == t2
     _ => false
   }
 }
@@ -63,9 +65,11 @@ fn Expr::fmt(self: Expr, bindings~: Array[String], depth~: Int, logger: &Logger)
     }
     Const(c) => c.output(logger)
     App(lhs, rhs) => {
-      logger.write_char('(')
+      let needs_parens = lhs is Abs(_)
+      if needs_parens { logger.write_char('(') }
       logger.write_object(lhs)
-      logger.write_string(") ")
+      if needs_parens { logger.write_char(')') }
+      logger.write_char(' ')
       logger.write_object(rhs)
     }
     Abs(x, ann, body) => {
@@ -87,6 +91,11 @@ fn Expr::fmt(self: Expr, bindings~: Array[String], depth~: Int, logger: &Logger)
     Tuple(elems) => {
       logger.write_iter(elems.iter(), prefix="(", suffix=")", sep=", ")
     }
+    Proj(lhs, index) => {
+      logger.write_object(lhs)
+      logger.write_char('.')
+      logger.write_object(index)
+    }
   }
 }
 
@@ -107,12 +116,17 @@ test "show expr" {
   assert_show_expr("true")
   assert_show_expr("false")
   assert_show_expr("fun x => x")
+  assert_show_expr("(true, false)")
+  assert_show_expr("(true, false, fun x => x)")
+  assert_show_expr("(true, false, fun x => x).2 (false, true)")
+  assert_show_expr("(fun x => x, (fun y => y, false)).1.0")
+  assert_show_expr("(true, true, true, true, true, true, true, true, true, true, true, true).11")
   assert_show_expr("fun x0 => fun y0 => fun z0 => fun x1 => fun y1 => fun z2 => y0")
   assert_show_expr("fun a: A => fun b: B => fun c: C => c")
   assert_show_expr("fun x => fun y => fun z => x")
   assert_show_expr("fun x => fun y => fun z => y")
   assert_show_expr("fun x => fun y => fun z => z")
   assert_show_expr("(fun x => fun y => y) true")
-  assert_show_expr("((fun x => fun y => fun z => x) true) false")
+  assert_show_expr("(fun x => fun y => fun z => x) true false")
   assert_show_expr("(fun x => x: A -> A)")
 }
