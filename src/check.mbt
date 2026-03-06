@@ -30,7 +30,6 @@ fn TypeContext::pop_binding(self: TypeContext) -> Unit {
 }
 
 pub fn TypeContext::infer(self: TypeContext, expr: Expr) -> Type raise TypeCheckError {
-  println("infer \{expr}")
   match expr {
     Ann(e, ty) => { self.check(e, ty); ty }
     Const(c) => match c {
@@ -53,20 +52,19 @@ pub fn TypeContext::infer(self: TypeContext, expr: Expr) -> Type raise TypeCheck
         _ => raise LhsOfApplicationNotAFunction(expr~)
       }
     }
-    Abs(Some(arg_ty), body) => {
+    Abs(_, Some(arg_ty), body) => {
       self.push_binding(arg_ty)
       let body_ty = self.infer(body)
       self.pop_binding()
       Arrow(arg_ty, body_ty)
     }
-    Abs(None, _) => raise MissingLambdaArgAnnotation(expr~)  
+    Abs(_, None, _) => raise MissingLambdaArgAnnotation(expr~)  
   }
 }
 
 pub fn TypeContext::check(self: TypeContext, expr: Expr, ty: Type) -> Unit raise TypeCheckError {
-  println("check \{expr}: \{ty}")
   match expr {
-    Abs(arg_ann, body) => {
+    Abs(_, arg_ann, body) => {
       match ty {
         Arrow(t0, t1) => {
           if arg_ann is Some(expected_arg_ty) && expected_arg_ty != t0 {

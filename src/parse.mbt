@@ -249,7 +249,7 @@ fn Parser::parse_abs(self: Parser) -> Expr raise ParserError {
   self.expect(FatArrow)
   let body = self.parse_expr()
   let _ = self.variables.unsafe_pop()
-  Expr::Abs(ty, body) 
+  Expr::Abs(v, ty, body) 
 }
 
 fn Parser::parse_app(self: Parser) -> Expr raise ParserError {
@@ -379,29 +379,29 @@ test "parser" {
   // exprs
   expect_expr("true", Const(Bool(true)))
   expect_expr("false", Const(Bool(false)))
-  expect_expr("fun x => x", Abs(None, Var(0)))
-  expect_expr("fun x => fun y => x", Abs(None, Abs(None, Var(1))))
-  expect_expr("fun x => fun y => y", Abs(None, Abs(None, Var(0))))
-  expect_expr("fun x => fun y => fun z => x", Abs(None, Abs(None, Abs(None, Var(2)))))
-  expect_expr("fun x => fun y => fun z => y", Abs(None, Abs(None, Abs(None, Var(1)))))
-  expect_expr("fun x => fun y => fun z => z", Abs(None, Abs(None, Abs(None, Var(0)))))
-  expect_expr("(fun x => x) true", App(Abs(None, Var(0)), Const(Bool(true))))
-  expect_expr("(fun x => x) (fun x => x)", App(Abs(None, Var(0)), Abs(None, Var(0))))
-  expect_expr("(fun x => x) (fun y => y)", App(Abs(None, Var(0)), Abs(None, Var(0))))
+  expect_expr("fun x => x", Abs("x", None, Var(0)))
+  expect_expr("fun x => fun y => x", Abs("x", None, Abs("y", None, Var(1))))
+  expect_expr("fun x => fun y => y", Abs("x", None, Abs("y", None, Var(0))))
+  expect_expr("fun x => fun y => fun z => x", Abs("x", None, Abs("y", None, Abs("z", None, Var(2)))))
+  expect_expr("fun x => fun y => fun z => y", Abs("x", None, Abs("y", None, Abs("z", None, Var(1)))))
+  expect_expr("fun x => fun y => fun z => z", Abs("x", None, Abs("y", None, Abs("z", None, Var(0)))))
+  expect_expr("(fun x => x) true", App(Abs("x", None, Var(0)), Const(Bool(true))))
+  expect_expr("(fun x => x) (fun x => x)", App(Abs("x", None, Var(0)), Abs("x", None, Var(0))))
+  expect_expr("(fun x => x) (fun y => y)", App(Abs("x", None, Var(0)), Abs("y", None, Var(0))))
   expect_expr("(true: Bool)", Ann(Const(Bool(true)), Bool))
-  expect_expr("(fun x => x: Bool -> Bool)", Ann(Abs(None, Var(0)), Arrow(Bool, Bool)))
+  expect_expr("(fun x => x: Bool -> Bool)", Ann(Abs("x", None, Var(0)), Arrow(Bool, Bool)))
   expect_expr(
     "(fun x => fun y => x: P -> Q -> P)",
-    Ann(Abs(None, Abs(None, Var(1))), Arrow(Atom("P"), Arrow(Atom("Q"), Atom("P"))))
+    Ann(Abs("x", None, Abs("y", None, Var(1))), Arrow(Atom("P"), Arrow(Atom("Q"), Atom("P"))))
   )
-  expect_expr("fun x: Bool => x", Abs(Some(Bool), Var(0)))
+  expect_expr("fun x: Bool => x", Abs("x", Some(Bool), Var(0)))
   expect_expr(
     "fun p: P => fun q: Q => fun f: P -> Q -> R => (f p) q",
-    Abs(Some(Atom("P")), Abs(Some(Atom("Q")), Abs(Some(Arrow(Atom("P"), Arrow(Atom("Q"), Atom("R")))), App(App(Var(0), Var(2)), Var(1)))))
+    Abs("p", Some(Atom("P")), Abs("q", Some(Atom("Q")), Abs("f", Some(Arrow(Atom("P"), Arrow(Atom("Q"), Atom("R")))), App(App(Var(0), Var(2)), Var(1)))))
   )
   expect_expr(
     "fun f => (fun x => f (x x)) (fun x => f (x x))",
-    Abs(None, App(Abs(None, App(Var(1), App(Var(0), Var(0)))), Abs(None, App(Var(1), App(Var(0), Var(0))))))
+    Abs("f", None, App(Abs("x", None, App(Var(1), App(Var(0), Var(0)))), Abs("x", None, App(Var(1), App(Var(0), Var(0))))))
   )
   
   expect_expr_fail("x", UnboundVar("x"))

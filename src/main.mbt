@@ -1,6 +1,6 @@
 fn main {
-  let expr = try! parse("(fun x: Bool => x)")
+  let expr = try! parse("fun a: A => fun b: B => fun c: C => c")
   let ctx = TypeContext::new()
   let ty = try? ctx.infer(expr)
-  println(ty)
+  println("\{expr}: \{ty}")
 }

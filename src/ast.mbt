@@ -2,18 +2,108 @@ pub enum Type {
   Arrow(Type, Type)
   Atom(String) // only introduced as lambda arguments to prove implications
   Bool
-} derive(Show, Eq)
+} derive(Eq)
 
 type DeBruijnIndex = Int
 
 pub enum Expr {
   Var(DeBruijnIndex)
-  Abs(Type?, Expr)
+  Abs(String, Type?, Expr)
   App(Expr, Expr)
   Ann(Expr, Type)
   Const(Const)
-} derive(Show, Eq)
+}
+
+pub impl Eq for Expr with equal(self: Expr, other: Expr) -> Bool {
+  match (self, other) {
+    (Var(i1), Var(i2)) => i1 == i2
+    (Abs(_, ann1, body1), Abs(_, ann2, body2)) => ann1 == ann2 && body1 == body2
+    (App(lhs1, rhs1), App(lhs2, rhs2)) => lhs1 == lhs2 && rhs1 == rhs2
+    (Ann(e1, t1), Ann(e2, t2)) => t1 == t2 && e1 == e2
+    (Const(c1), Const(c2)) => c1 == c2
+    _ => false
+  }
+}
+
 
 pub enum Const {
   Bool(Bool)
-} derive(Show, Eq)
+} derive(Eq)
+
+
+pub impl Show for Type with output(self: Type, logger: &Logger) {
+  let str = match self {
+    Bool => "Bool"
+    Atom(a) => a
+    Arrow(t0, t1) => "\{t0} -> \{t1}"
+  }
+
+  logger.write_string(str)
+}
+
+pub impl Show for Const with output(self: Const, logger: &Logger) {
+  let str = match self {
+    Bool(true) => "true"
+    Bool(false) => "false"
+  }
+
+  logger.write_string(str)
+}
+
+fn Expr::fmt(self: Expr, bindings~: Array[String], depth~: Int, logger: &Logger) -> Unit {
+  match self {
+    Var(idx) => {
+      logger.write_string(bindings[bindings.length() - 1 - idx])
+    }
+    Const(c) => c.output(logger)
+    App(lhs, rhs) => {
+      logger.write_char('(')
+      logger.write_object(lhs)
+      logger.write_string(") ")
+      logger.write_object(rhs)
+    }
+    Abs(x, ann, body) => {
+      bindings.push(x)
+      logger.write_string("fun ")
+      logger.write_string(bindings[depth])
+      if ann is Some(ty) { logger.write_string(": \{ty}") }
+      logger.write_string(" => ")
+      body.fmt(bindings~, depth=depth + 1, logger)
+      let _ = bindings.unsafe_pop()
+    }
+    Ann(e, ty) => {
+      logger.write_char('(')
+      logger.write_object(e)
+      logger.write_string(": ")
+      logger.write_object(ty)
+      logger.write_char(')')
+    }
+  }
+}
+
+pub impl Show for Expr with output(self: Expr, logger: &Logger) {
+  self.fmt(bindings=[], depth=0, logger)
+}
+
+test "show expr" {
+  fn assert_show_expr(expr: String) raise {
+    assert_eq("\{parse(expr)}", expr)
+  }
+
+  {
+    let e = Abs("a", Some(Atom("A")), Abs("b", Some(Atom("B")), Abs("c", Some(Atom("C")), Var(0))))
+    assert_eq("\{e}", "fun a: A => fun b: B => fun c: C => c")
+  }
+
+  assert_show_expr("true")
+  assert_show_expr("false")
+  assert_show_expr("fun x => x")
+  assert_show_expr("fun x0 => fun y0 => fun z0 => fun x1 => fun y1 => fun z2 => y0")
+  assert_show_expr("fun a: A => fun b: B => fun c: C => c")
+  assert_show_expr("fun x => fun y => fun z => x")
+  assert_show_expr("fun x => fun y => fun z => y")
+  assert_show_expr("fun x => fun y => fun z => z")
+  assert_show_expr("(fun x => fun y => y) true")
+  assert_show_expr("((fun x => fun y => fun z => x) true) false")
+  assert_show_expr("(fun x => x: A -> A)")
+}
