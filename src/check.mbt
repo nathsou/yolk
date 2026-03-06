@@ -13,7 +13,7 @@ pub suberror TypeCheckError {
 } derive(Show)
 
 pub struct TypeContext {
-  bindings: Array[Type] // Type
+  bindings: Array[Type]
 }
 
 pub fn TypeContext::new() -> TypeContext {
@@ -121,6 +121,19 @@ pub fn TypeContext::check(self: TypeContext, expr: Expr, ty: Type) -> Unit raise
   }
 }
 
+pub fn proove(prop: String, proof: String) -> Unit raise {
+  try {
+    let prop_ty = parse_type(prop)
+    let proof_term = parse(proof)
+    let ctx = TypeContext::new()
+    ctx.check(proof_term, prop_ty)
+  } catch {
+    err => {
+      fail("Could not prove '\{prop}' with '\{proof}': \{err}")
+    }
+  }
+}
+
 test "check" {
   fn assert_type(expr: String, ty: String) -> Unit raise {
     let ctx = TypeContext::new()
@@ -169,4 +182,31 @@ test "check" {
   // self-application is not typeable
   assert_infer_err("fun x: P -> P => x x")
   assert_infer_err("fun x: P => x x")
+  assert_infer_err("(true, false).2")
+}
+
+test "proofs" {
+  // A => B => (A ^ B)
+  proove("A -> B -> (A, B)", "fun x => fun y => (x, y)")
+
+  // S combinator
+  proove("(A -> B -> C) -> (A -> B) -> A -> C", "fun f => fun g => fun x => f x (g x)")
+
+  // transitivity of implication
+  proove("(A -> B) -> (B -> C) -> A -> C", "fun f => fun g => fun x => g (f x)")
+  
+  // (A ^ B) => A
+  proove("(A, B) -> A", "fun x => x.0")
+  
+  // (A ^ B) => B
+  proove("(A, B) -> B", "fun x => x.1")
+
+  // (A ^ B) => (B ^ A) (commutativity of conjunction)
+  proove("(A, B) -> (B, A)", "fun x => (x.1, x.0)")
+
+  // (A ^ B) ^ C => A ^ (B ^ C) (associativity of conjunction)
+  proove("((A, B), C) -> (A, (B, C))", "fun x => (x.0.0, (x.0.1, x.1))")
+
+  // ((A -> B) ^ (A -> C)) -> A -> B ^ C (distributivity of conjunction)
+  proove("(A -> B, A -> C) -> A -> (B, C)", "fun p => fun x => (p.0 x, p.1 x)")
 }
