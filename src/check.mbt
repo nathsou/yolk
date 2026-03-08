@@ -10,6 +10,7 @@ pub suberror TypeCheckError {
   TupleSizeMismatch(expr~: Expr, expected~: Int, got~: Int)
   ProjOutOfBounds(expr~: Expr, size~: Int)
   UnboundVariable(DeBruijnIndex)
+  UnboundFreeVariable(String)
 } derive(Show)
 
 pub struct TypeContext {
@@ -38,13 +39,14 @@ pub fn TypeContext::infer(self: TypeContext, expr: Expr) -> Type raise TypeCheck
     Const(c) => match c {
       Bool(_) => Bool
     }
-    Var(idx) => {
+    BoundVar(idx) => {
       if self.lookup(idx) is Some(ty) {
         ty
       } else {
         raise UnboundVariable(idx)
       }
     }
+    FreeVar(x) => raise UnboundFreeVariable(x)
     App(lhs, rhs) => {
       let lhs_ty = self.infer(lhs)
       match lhs_ty {
@@ -207,6 +209,6 @@ test "proofs" {
   // (A ^ B) ^ C => A ^ (B ^ C) (associativity of conjunction)
   proove("((A, B), C) -> (A, (B, C))", "fun x => (x.0.0, (x.0.1, x.1))")
 
-  // ((A -> B) ^ (A -> C)) -> A -> B ^ C (distributivity of conjunction)
+  // ((A -> B) ^ (A -> C)) -> A -> B ^ C (pairing of implications)
   proove("(A -> B, A -> C) -> A -> (B, C)", "fun p => fun x => (p.0 x, p.1 x)")
 }

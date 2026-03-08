@@ -1,78 +1,61 @@
 
-pub suberror EvalError {
-  ExpectedTupleInProj(Expr)
+pub fn eval(expr: Expr) -> Expr raise TypeCheckError {
+  // only normalise expr if it type checks
+  let ctx = TypeContext::new()
+  let _ = ctx.infer(expr)
+  normalise(expr)
 }
 
-pub fn eval(expr: Expr) -> Expr raise EvalError {
-  let mut res = expr
-
-  while step(res) is next && next != res {
-    res = next
-  }
-
-  res
-}
-
-fn step(expr: Expr) -> Expr raise EvalError {
+fn normalise(expr: Expr) -> Expr {
   match expr {
-    App(Abs(_, _, body), arg) => shift(subst(body, 0, shift(arg, 0, 1)), 0, -1)
-    App(lhs, rhs) => App(eval(lhs), eval(rhs))
-    Ann(e, _) => eval(e)
-    Tuple(elems) => Tuple(elems.map(eval))
-    Proj(lhs, idx) => {
-      let tuple = eval(lhs)
-      if tuple is Tuple(elems) {
-        elems[idx.reinterpret_as_int()]
-      } else {
-        // type checking should guarantee that lhs is a tuple
-        raise ExpectedTupleInProj(expr)
+    App(lhs, rhs) => {
+      let norm_lhs = normalise(lhs)
+      let norm_rhs = normalise(rhs)
+      
+      match norm_lhs {
+        Abs(_, _, body) => normalise(instantiate(body, 0, norm_rhs))
+        _ => App(norm_lhs, norm_rhs)
       }
     }
-    Abs(_) | Var(_) | Const(_) => expr
+    Ann(e, _) => normalise(e)
+    Tuple(elems) => Tuple(elems.map(normalise))
+    Proj(lhs, idx) => match normalise(lhs) {
+      Tuple(elems) => elems[idx.reinterpret_as_int()]
+      _ => expr // not possible after type checking
+    }
+    Abs(_) | BoundVar(_) | FreeVar(_) | Const(_) => expr
   }
 }
 
-fn subst(expr: Expr, idx: DeBruijnIndex, s: Expr) -> Expr {
+fn instantiate(expr: Expr, idx: DeBruijnIndex, s: Expr) -> Expr {
   match expr {
-    Var(n) if n == idx => s
-    Var(_) | Const(_) => expr
-    Abs(x, ty, body) => Abs(x, ty, subst(body, idx + 1, shift(s, 0, 1)))
-    App(lhs, rhs) => App(subst(lhs, idx, s), subst(rhs, idx, s))
-    Ann(e, ty) => Ann(subst(e, idx, s), ty)
-    Tuple(elems) => Tuple(elems.map(e => subst(e, idx, s)))
-    Proj(lhs, i) => Proj(subst(lhs, idx, s), i)
-  }
-}
-
-fn shift(expr: Expr, depth: Int, amount: Int) -> Expr {
-  match expr {
-    Abs(x, ty, body) => Abs(x, ty, shift(body, depth + 1, amount))
-    App(f, arg) => App(shift(f, depth, amount), shift(arg, depth, amount))
-    Ann(e, ty) => Ann(shift(e, depth, amount), ty)
-    Tuple(elems) => Tuple(elems.map(e => shift(e, depth, amount)))
-    Proj(lhs, idx) => Proj(shift(lhs, depth, amount), idx)
-    Var(n) if n >= depth => Var(n + amount) // free variable
-    Var(_) | Const(_) => expr
+    BoundVar(n) if n == idx => s
+    Abs(x, ty, body) => Abs(x, ty, instantiate(body, idx + 1, s))
+    App(lhs, rhs) => App(instantiate(lhs, idx, s), instantiate(rhs, idx, s))
+    Ann(e, ty) => Ann(instantiate(e, idx, s), ty)
+    Tuple(elems) => Tuple(elems.map(e => instantiate(e, idx, s)))
+    Proj(lhs, i) => Proj(instantiate(lhs, idx, s), i)
+    BoundVar(_) | FreeVar(_) | Const(_) => expr
   }
 }
 
 test "eval" {
-  fn assert_eval(input: String, res: String) raise {
-    assert_eq(eval(parse(input)), parse(res))
+  fn assert_nf(expr: String, expected_normal_form: String) raise {
+    assert_eq(eval(parse(expr)), parse(expected_normal_form))
   }
 
-  assert_eval("true", "true")
-  assert_eval("false", "false")
-  assert_eval("(true: Bool)", "true")
-  assert_eval("(true, false)", "(true, false)")
-  assert_eval("(true, false).0", "true")
-  assert_eval("(true, false).1", "false")
-  assert_eval("(true, fun x => x).1 true", "true")
-  assert_eval("fun x => x", "fun y => y")
-  assert_eval("(fun x => x) true", "true")
-  assert_eval("(fun x => fun y => x) true false", "true")
-  assert_eval("(fun x => fun y => y) true false", "false")
-  assert_eval("(fun x => fun y => (x, y)) true (false, false)", "(true, (false, false))")
-  assert_eval("(fun x => fun y => (y, x, y)) true (false, false)", "((false, false), true, (false, false))")
-  assert_eval("(true, (fun x => (x, x)) (true, false))", "(true, ((true, false), (true, false)))")
+  assert_nf("true", "true")
+  assert_nf("false", "false")
+  assert_nf("(true: Bool)", "true")
+  assert_nf("(true, false)", "(true, false)")
+  assert_nf("(true, false).0", "true")
+  assert_nf("(true, false).1", "false")
+  assert_nf("(true, fun x: Bool => x).1 true", "true")
+  assert_nf("fun x: A => x", "fun y: A => y")
+  assert_nf("(fun x: Bool => x) true", "true")
+  assert_nf("(fun x: Bool => fun y: Bool => x) true false", "true")
+  assert_nf("(fun x: Bool => fun y: Bool => y) true false", "false")
+  assert_nf("(fun x: Bool => fun y: (Bool, Bool) => (x, y)) true (false, false)", "(true, (false, false))")
+  assert_nf("(fun x: Bool => fun y: (Bool, Bool) => (y, x, y)) true (false, false)", "((false, false), true, (false, false))")
+  assert_nf("(true, (fun x: (Bool, Bool) => (x, x)) (true, false))", "(true, ((true, false), (true, false)))")
 }

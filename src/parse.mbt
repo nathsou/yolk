@@ -194,7 +194,6 @@ pub struct Parser {
 pub suberror ParserError {
   UnexpectedToken(Token)
   Expected(expected~: Token, received~: Token)
-  UnboundVar(String)
   Message(String)
   UnexpectedEOF
   ExpectedNat(Token)
@@ -230,12 +229,12 @@ fn Parser::expect(self: Parser, expected: Token) -> Unit raise ParserError {
   }
 }
 
-fn Parser::expect_var(self: Parser) -> String raise ParserError {
+fn Parser::expect_BoundVar(self: Parser) -> String raise ParserError {
   if self.peek() is Var(v) {
     self.advance()
     v
   } else {
-    raise Message("Expected variable")
+    raise Message("Expected BoundVariable")
   }
 }
 
@@ -258,7 +257,7 @@ fn Parser::parse_expr(self: Parser) -> Expr raise ParserError {
 
 fn Parser::parse_abs(self: Parser) -> Expr raise ParserError {
   self.expect(Fun)
-  let v = self.expect_var()
+  let v = self.expect_BoundVar()
   self.variables.push(v)
   defer { let _ = self.variables.unsafe_pop() }
   
@@ -309,11 +308,11 @@ fn Parser::parse_atom(self: Parser) -> Expr raise ParserError {
 
       for i = self.variables.length() - 1; i >= 0; i = i - 1 {
         if self.variables[i] == v {
-          return Expr::Var(self.variables.length() - 1 - i)
+          return Expr::BoundVar(self.variables.length() - 1 - i)
         }
       }
 
-      raise UnboundVar(v)
+      FreeVar(v)
     }
     True => { self.advance(); Expr::Const(Bool(true)) }
     False => { self.advance(); Expr::Const(Bool(false)) }
@@ -449,38 +448,41 @@ test "parser" {
   // exprs
   expect_expr("true", Const(Bool(true)))
   expect_expr("false", Const(Bool(false)))
+  expect_expr("x", FreeVar("x"))
+  expect_expr("(z1: (Bool, A -> B))", Ann(FreeVar("z1"), Tuple([Bool, Arrow(Atom("A"), Atom("B"))])))
+  expect_expr("fun x => y", Abs("x", None, FreeVar("y")))
   expect_expr("(true, false)", Tuple([Const(Bool(true)), Const(Bool(false))]))
   expect_expr("(true, (false, false))", Tuple([Const(Bool(true)), Tuple([Const(Bool(false)), Const(Bool(false))])]))
   expect_expr("(true, false, false)", Tuple([Const(Bool(true)), Const(Bool(false)), Const(Bool(false))]))
   expect_expr("(true, false).0", Proj(Tuple([Const(Bool(true)), Const(Bool(false))]), 0))
   expect_expr("(true, (false, true)).1.0", Proj(Proj(Tuple([Const(Bool(true)), Tuple([Const(Bool(false)), Const(Bool(true))])]), 1), 0))
-  expect_expr("fun x => x", Abs("x", None, Var(0)))
-  expect_expr("fun x => fun y => x", Abs("x", None, Abs("y", None, Var(1))))
-  expect_expr("fun x => fun y => y", Abs("x", None, Abs("y", None, Var(0))))
-  expect_expr("fun x => fun y => fun z => x", Abs("x", None, Abs("y", None, Abs("z", None, Var(2)))))
-  expect_expr("fun x => fun y => fun z => y", Abs("x", None, Abs("y", None, Abs("z", None, Var(1)))))
-  expect_expr("fun x => fun y => fun z => z", Abs("x", None, Abs("y", None, Abs("z", None, Var(0)))))
-  expect_expr("(fun x => x) true", App(Abs("x", None, Var(0)), Const(Bool(true))))
-  expect_expr("(fun x => x) (fun x => x)", App(Abs("x", None, Var(0)), Abs("x", None, Var(0))))
-  expect_expr("(fun x => x) (fun y => y)", App(Abs("x", None, Var(0)), Abs("y", None, Var(0))))
+  expect_expr("fun x => x", Abs("x", None, BoundVar(0)))
+  expect_expr("fun x: A => x", Abs("x", Some(Atom("A")), BoundVar(0)))
+  expect_expr("fun x: A => (x: A)", Abs("x", Some(Atom("A")), Ann(BoundVar(0), Atom("A"))))
+  expect_expr("fun x => fun y => x", Abs("x", None, Abs("y", None, BoundVar(1))))
+  expect_expr("fun x => fun y => y", Abs("x", None, Abs("y", None, BoundVar(0))))
+  expect_expr("fun x => fun y => fun z => x", Abs("x", None, Abs("y", None, Abs("z", None, BoundVar(2)))))
+  expect_expr("fun x => fun y => fun z => y", Abs("x", None, Abs("y", None, Abs("z", None, BoundVar(1)))))
+  expect_expr("fun x => fun y => fun z => z", Abs("x", None, Abs("y", None, Abs("z", None, BoundVar(0)))))
+  expect_expr("(fun x => x) true", App(Abs("x", None, BoundVar(0)), Const(Bool(true))))
+  expect_expr("(fun x => x) (fun x => x)", App(Abs("x", None, BoundVar(0)), Abs("x", None, BoundVar(0))))
+  expect_expr("(fun x => x) (fun y => y)", App(Abs("x", None, BoundVar(0)), Abs("y", None, BoundVar(0))))
   expect_expr("(true: Bool)", Ann(Const(Bool(true)), Bool))
-  expect_expr("(fun x => x: Bool -> Bool)", Ann(Abs("x", None, Var(0)), Arrow(Bool, Bool)))
+  expect_expr("(fun x => x: Bool -> Bool)", Ann(Abs("x", None, BoundVar(0)), Arrow(Bool, Bool)))
   expect_expr(
     "(fun x => fun y => x: P -> Q -> P)",
-    Ann(Abs("x", None, Abs("y", None, Var(1))), Arrow(Atom("P"), Arrow(Atom("Q"), Atom("P"))))
+    Ann(Abs("x", None, Abs("y", None, BoundVar(1))), Arrow(Atom("P"), Arrow(Atom("Q"), Atom("P"))))
   )
-  expect_expr("fun x: Bool => x", Abs("x", Some(Bool), Var(0)))
+  expect_expr("fun x: Bool => x", Abs("x", Some(Bool), BoundVar(0)))
   expect_expr(
     "fun p: P => fun q: Q => fun f: P -> Q -> R => (f p) q",
-    Abs("p", Some(Atom("P")), Abs("q", Some(Atom("Q")), Abs("f", Some(Arrow(Atom("P"), Arrow(Atom("Q"), Atom("R")))), App(App(Var(0), Var(2)), Var(1)))))
+    Abs("p", Some(Atom("P")), Abs("q", Some(Atom("Q")), Abs("f", Some(Arrow(Atom("P"), Arrow(Atom("Q"), Atom("R")))), App(App(BoundVar(0), BoundVar(2)), BoundVar(1)))))
   )
   expect_expr(
     "fun f => (fun x => f (x x)) (fun x => f (x x))",
-    Abs("f", None, App(Abs("x", None, App(Var(1), App(Var(0), Var(0)))), Abs("x", None, App(Var(1), App(Var(0), Var(0))))))
+    Abs("f", None, App(Abs("x", None, App(BoundVar(1), App(BoundVar(0), BoundVar(0)))), Abs("x", None, App(BoundVar(1), App(BoundVar(0), BoundVar(0))))))
   )
-  expect_expr("fun x => fun y => (x, y)", Abs("x", None, Abs("y", None, Tuple([Var(1), Var(0)]))))
+  expect_expr("fun x => fun y => (x, y)", Abs("x", None, Abs("y", None, Tuple([BoundVar(1), BoundVar(0)]))))
   
-  expect_expr_fail("x", UnboundVar("x"))
-  expect_expr_fail("fun x => y", UnboundVar("y"))
   expect_expr_fail("true)", UnexpectedToken(Rparen))
 }

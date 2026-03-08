@@ -8,7 +8,8 @@ pub enum Type {
 type DeBruijnIndex = Int
 
 pub enum Expr {
-  Var(DeBruijnIndex)
+  BoundVar(DeBruijnIndex)
+  FreeVar(String)
   Abs(String, Type?, Expr)
   App(Expr, Expr)
   Ann(Expr, Type)
@@ -17,9 +18,14 @@ pub enum Expr {
   Const(Const)
 }
 
+pub enum Const {
+  Bool(Bool)
+} derive(Eq)
+
 pub impl Eq for Expr with equal(self: Expr, other: Expr) -> Bool {
   match (self, other) {
-    (Var(i1), Var(i2)) => i1 == i2
+    (BoundVar(i1), BoundVar(i2)) => i1 == i2
+    (FreeVar(x1), FreeVar(x2)) => x1 == x2
     (Abs(_, ann1, body1), Abs(_, ann2, body2)) => ann1 == ann2 && body1 == body2
     (App(lhs1, rhs1), App(lhs2, rhs2)) => lhs1 == lhs2 && rhs1 == rhs2
     (Ann(e1, t1), Ann(e2, t2)) => t1 == t2 && e1 == e2
@@ -29,10 +35,6 @@ pub impl Eq for Expr with equal(self: Expr, other: Expr) -> Bool {
     _ => false
   }
 }
-
-pub enum Const {
-  Bool(Bool)
-} derive(Eq)
 
 pub impl Show for Type with output(self: Type, logger: &Logger) {
   match self {
@@ -60,30 +62,36 @@ pub impl Show for Const with output(self: Const, logger: &Logger) {
 
 fn Expr::fmt(self: Expr, bindings~: Array[String], depth~: Int, logger: &Logger) -> Unit {
   match self {
-    Var(idx) => {
-      logger.write_string(bindings[bindings.length() - 1 - idx])
+    BoundVar(idx) => {
+      let eff_idx = bindings.length() - 1 - idx
+      if eff_idx < 0 {
+        abort("invalid bound var index")
+      } else {
+        logger.write_string(bindings[eff_idx])
+      }
     }
+    FreeVar(x) => logger.write_string(x)
     Const(c) => c.output(logger)
     App(lhs, rhs) => {
       let needs_parens = lhs is Abs(_)
       if needs_parens { logger.write_char('(') }
-      logger.write_object(lhs)
+      lhs.fmt(bindings~, depth~, logger)
       if needs_parens { logger.write_char(')') }
       logger.write_char(' ')
-      logger.write_object(rhs)
+      rhs.fmt(bindings~, depth~, logger)
     }
     Abs(x, ann, body) => {
       bindings.push(x)
       defer { let _ = bindings.unsafe_pop() }
       logger.write_string("fun ")
-      logger.write_string(bindings[depth])
+      logger.write_string(x)
       if ann is Some(ty) { logger.write_string(": \{ty}") }
       logger.write_string(" => ")
       body.fmt(bindings~, depth=depth + 1, logger)
     }
     Ann(e, ty) => {
       logger.write_char('(')
-      logger.write_object(e)
+      e.fmt(bindings~, depth~, logger)
       logger.write_string(": ")
       logger.write_object(ty)
       logger.write_char(')')
@@ -92,7 +100,7 @@ fn Expr::fmt(self: Expr, bindings~: Array[String], depth~: Int, logger: &Logger)
       logger.write_iter(elems.iter(), prefix="(", suffix=")", sep=", ")
     }
     Proj(lhs, index) => {
-      logger.write_object(lhs)
+      lhs.fmt(bindings~, depth~, logger)
       logger.write_char('.')
       logger.write_object(index)
     }
@@ -109,13 +117,16 @@ test "show expr" {
   }
 
   {
-    let e = Abs("a", Some(Atom("A")), Abs("b", Some(Atom("B")), Abs("c", Some(Atom("C")), Var(0))))
+    let e = Abs("a", Some(Atom("A")), Abs("b", Some(Atom("B")), Abs("c", Some(Atom("C")), BoundVar(0))))
     assert_eq("\{e}", "fun a: A => fun b: B => fun c: C => c")
   }
 
   assert_show_expr("true")
   assert_show_expr("false")
+  assert_show_expr("(x: Bool)")
   assert_show_expr("fun x => x")
+  assert_show_expr("fun x: Bool => x")
+  assert_show_expr("fun x: Bool => (x: Bool)")
   assert_show_expr("(true, false)")
   assert_show_expr("(true, false, fun x => x)")
   assert_show_expr("(true, false, fun x => x).2 (false, true)")
@@ -129,4 +140,5 @@ test "show expr" {
   assert_show_expr("(fun x => fun y => y) true")
   assert_show_expr("(fun x => fun y => fun z => x) true false")
   assert_show_expr("(fun x => x: A -> A)")
+  assert_show_expr("f g x")
 }
