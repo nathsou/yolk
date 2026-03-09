@@ -1,45 +1,21 @@
 
-pub enum Term {
+// Surface-level syntax
+pub enum Expr {
   Star
   Box
   Bool
   Const(Const)
-  BoundVar(DeBruijnIndex)
-  FreeVar(String, FreeVarId)
-  LocalVar(String, FreeVarId)
-  App(Term, Term)
-  Lam(String, Term, Term)
-  Pi(String?, Term, Term)
-  Ann(Term, Term)
-}
+  Var(String)
+  App(Expr, Expr)
+  Fun(String, Expr, Expr)
+  Pi(String?, Expr, Expr)
+  Ann(Expr, Expr)
+  Let(name~: String, ty~: Expr, val~: Expr, rhs~: Expr)
+} derive (Eq)
 
 pub enum Const {
   Bool(Bool)
 } derive(Eq)
-
-pub type DeBruijnIndex = UInt
-pub type FreeVarId = UInt
-
-pub fn Term::is_sort(self: Term) -> Bool {
-  self is (Star | Box)
-}
-
-pub impl Eq for Term with equal(self: Term, other: Term) -> Bool {
-  match (self, other) {
-    (Box, Box) => true
-    (Star, Star) => true
-    (Bool, Bool) => true
-    (Const(c1), Const(c2)) => c1 == c2
-    (BoundVar(i), BoundVar(j)) => i == j
-    (FreeVar(_, x), FreeVar(_, y)) => x == y
-    (LocalVar(_, x), LocalVar(_, y)) => x == y
-    (App(f, x), App(g, y)) => x == y && f == g
-    (Lam(_, t1, body1), Lam(_, t2, body2)) => t1 == t2 && body1 == body2
-    (Pi(_, a1, b1), Pi(_, a2, b2)) => a1 == a2 && b1 == b2
-    (Ann(lhs1, ty1), (Ann(lhs2, ty2))) => ty1 == ty2 && lhs1 == lhs2
-    _ => false
-  }
-}
 
 pub impl Show for Const with output(self: Const, logger: &Logger) {
   let str = match self {
@@ -50,36 +26,27 @@ pub impl Show for Const with output(self: Const, logger: &Logger) {
   logger.write_string(str)
 }
 
-fn Term::parens(self: Term, wrap~: Bool, bindings~: Array[String], depth~: Int, logger: &Logger) -> Unit {
+fn Expr::parens(self: Expr, wrap~: Bool, bindings~: Array[String], depth~: Int, logger: &Logger) -> Unit {
   if wrap { logger.write_char('(') }
   self.fmt(bindings~, depth~, logger)
   if wrap { logger.write_char(')') }
 }
 
-fn Term::fmt(self: Term, bindings~: Array[String], depth~: Int, logger: &Logger) -> Unit {
+fn Expr::fmt(self: Expr, bindings~: Array[String], depth~: Int, logger: &Logger) -> Unit {
   match self {
     Bool => logger.write_string("Bool")
     Star => logger.write_char('*')
     Box => logger.write_char('□')
-    BoundVar(idx) => {
-      let eff_idx = bindings.length() - 1 - idx.reinterpret_as_int()
-      if eff_idx < 0 {
-        logger.write_string("<invalid bound variable index: \{idx}>")
-      } else {
-        logger.write_string(bindings[eff_idx])
-      }
-    }
-    FreeVar(name, _) => logger.write_string(name)
-    LocalVar(name, _) => logger.write_string(name)
+    Var(name) => logger.write_string(name)
     Const(c) => c.output(logger)
     App(lhs, rhs) => {
-      let lhs_needs_parens = lhs is Lam(_)
-      let rhs_needs_parens = rhs is (Lam(_) | App(_))
+      let lhs_needs_parens = lhs is Fun(_)
+      let rhs_needs_parens = rhs is (Fun(_) | App(_))
       lhs.parens(wrap=lhs_needs_parens, bindings~, depth~, logger)
       logger.write_char(' ')
       rhs.parens(wrap=rhs_needs_parens, bindings~, depth~, logger)
     }
-    Lam(x, ty, body) => {
+    Fun(x, ty, body) => {
       bindings.push(x)
       defer { let _ = bindings.unsafe_pop() }
       logger.write_string("fun ")
@@ -106,26 +73,37 @@ fn Term::fmt(self: Term, bindings~: Array[String], depth~: Int, logger: &Logger)
     }
     Ann(e, ty) => {
       logger.write_char('(')
-      let lhs_needs_parens = e is (App(_) | Lam(_) | Pi(_))
+      let lhs_needs_parens = e is (App(_) | Fun(_) | Pi(_))
       e.parens(wrap=lhs_needs_parens, bindings~, depth~, logger)
       logger.write_string(": ")
       ty.fmt(bindings~, depth~, logger)
       logger.write_char(')')
     }
+    Let(name~, ty~, val~, rhs~) => {
+      logger.write_string("let ")
+      logger.write_string(name)
+      logger.write_string(": ")
+      ty.fmt(bindings~, depth~, logger)
+      logger.write_char(' ')
+      logger.write_string(" = ")
+      val.fmt(bindings~, depth~, logger)
+      logger.write_string(" in ")
+      rhs.fmt(bindings~, depth~, logger)
+    }
   }
 }
 
-pub impl Show for Term with output(self: Term, logger: &Logger) {
+pub impl Show for Expr with output(self: Expr, logger: &Logger) {
   self.fmt(bindings=[], depth=0, logger)
 }
 
-test "show term" {
+test "show expr" {
   fn assert_show_expr(expr: String) raise {
     assert_eq("\{parse(expr)}", expr)
   }
 
   {
-    let e = Lam("a", FreeVar("A", 0), Lam("b", FreeVar("B", 1), Lam("c", FreeVar("C", 2), BoundVar(0))))
+    let e: Expr = Fun("a", Var("A"), Fun("b", Var("B"), Fun("c", Var("C"), Var("c"))))
     assert_eq("\{e}", "fun a: A => fun b: B => fun c: C => c")
   }
 

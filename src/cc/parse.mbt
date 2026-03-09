@@ -1,6 +1,6 @@
 
 pub enum Token {
-  Lparen; Rparen; ThickArrow; Arrow; Star; Box; Fun; Forall;
+  Lparen; Rparen; ThickArrow; Arrow; Star; Box; Fun; Forall; Let; Equal; In
   Colon; Comma; Dot; True; False; Nat(UInt); Var(String); Bool
 } derive(Show, Eq)
 
@@ -115,7 +115,7 @@ fn Lexer::next(self: Lexer) -> LexerResult {
       if self.consumes('>') {
         Yay(ThickArrow)
       } else {
-        Grr(UnexpectedChar(char~, index=self.index))
+        Yay(Equal)
       }
     }
     '-' => {
@@ -133,6 +133,8 @@ fn Lexer::next(self: Lexer) -> LexerResult {
         match identifier {
           "fun" => Yay(Fun)
           "forall" => Yay(Forall)
+          "let" => Yay(Let)
+          "in" => Yay(In)
           "true" => Yay(True)
           "false" => Yay(False)
           "Bool" => Yay(Bool)
@@ -226,8 +228,8 @@ fn Parser::expect_var(self: Parser) -> String raise ParserError {
   }
 }
 
-pub fn Parser::parse(self: Parser) -> Term raise ParserError {
-  let expr = self.parse_term()
+pub fn Parser::parse(self: Parser) -> Expr raise ParserError {
+  let expr = self.parse_expr()
 
   if self.index != self.tokens.length() {
     raise UnexpectedToken(self.tokens[self.index])
@@ -236,39 +238,54 @@ pub fn Parser::parse(self: Parser) -> Term raise ParserError {
   expr
 }
 
-fn Parser::parse_term(self: Parser) -> Term raise ParserError {
+fn Parser::parse_expr(self: Parser) -> Expr raise ParserError {
   match self.peek() {
     Fun => self.parse_fun()
     Forall => self.parse_forall()
+    Let => self.parse_let()
     _ => self.parse_app()
   }
 }
 
-fn Parser::parse_fun(self: Parser) -> Term raise ParserError {
+fn Parser::parse_fun(self: Parser) -> Expr raise ParserError {
   self.expect(Fun)
   let v = self.expect_var()
   self.expect(Colon)
-  let ty = self.parse_term()
+  let ty = self.parse_expr()
   self.expect(ThickArrow)
   self.bound_vars.push(v)
   defer { let _ = self.bound_vars.unsafe_pop() }
-  let body = self.parse_term()
-  Lam(v, ty, body) 
+  let body = self.parse_expr()
+  Fun(v, ty, body) 
 }
 
-fn Parser::parse_forall(self: Parser) -> Term raise ParserError {
+fn Parser::parse_forall(self: Parser) -> Expr raise ParserError {
   self.expect(Forall)
   let v = self.expect_var()
   self.expect(Colon)
-  let ty = self.parse_term()
+  let ty = self.parse_expr()
   self.expect(Comma)
   self.bound_vars.push(v)
   defer { let _ = self.bound_vars.unsafe_pop() }
-  let rhs = self.parse_term()
+  let rhs = self.parse_expr()
   Pi(Some(v), ty, rhs)
 }
 
-fn Parser::parse_app(self: Parser) -> Term raise ParserError {
+fn Parser::parse_let(self: Parser) -> Expr raise ParserError {
+  self.expect(Let)
+  let name = self.expect_var()
+  self.expect(Colon)
+  let ty = self.parse_expr()
+  self.expect(Equal)
+  let val = self.parse_expr()
+  self.expect(In)
+  self.bound_vars.push(name)
+  defer { let _ = self.bound_vars.unsafe_pop() }
+  let rhs = self.parse_expr()
+  Let(name~, ty~, val~, rhs~)
+}
+
+fn Parser::parse_app(self: Parser) -> Expr raise ParserError {
   let mut lhs = self.parse_arrow()
 
   while (try? self.parse_arrow()) is Ok(rhs) {
@@ -278,7 +295,7 @@ fn Parser::parse_app(self: Parser) -> Term raise ParserError {
   lhs
 }
 
-fn Parser::parse_arrow(self: Parser) -> Term raise ParserError {
+fn Parser::parse_arrow(self: Parser) -> Expr raise ParserError {
   let lhs = self.parse_atom()
 
   if self.matches(Arrow) {
@@ -291,26 +308,11 @@ fn Parser::parse_arrow(self: Parser) -> Term raise ParserError {
   }
 }
 
-fn Parser::parse_atom(self: Parser) -> Term raise ParserError {
+fn Parser::parse_atom(self: Parser) -> Expr raise ParserError {
   match self.peek() {
     Var(v) => {
       self.advance();
-
-      for i = self.bound_vars.length() - 1; i >= 0; i = i - 1 {
-        if self.bound_vars[i] == v {
-          return BoundVar((self.bound_vars.length() - 1 - i).reinterpret_as_uint())
-        }
-      }
-
-      let var_id: FreeVarId = if self.free_vars.get(v) is Some(var_id) {
-        var_id
-      } else {
-        let var_id = self.free_vars.length().reinterpret_as_uint()
-        self.free_vars[v] = var_id
-        var_id
-      }
-
-      FreeVar(v, var_id)
+      Var(v)
     }
     Bool => { self.advance(); Bool }
     Star => { self.advance(); Star }
@@ -319,12 +321,12 @@ fn Parser::parse_atom(self: Parser) -> Term raise ParserError {
     False => { self.advance(); Const(Bool(false)) }
     Lparen => {
       self.advance()
-      let lhs = self.parse_term()
+      let lhs = self.parse_expr()
 
       match self.peek() {
         Colon => {
           self.advance()
-          let ty = self.parse_term()
+          let ty = self.parse_expr()
           self.expect(Rparen)
 
           Ann(lhs, ty)
@@ -337,17 +339,17 @@ fn Parser::parse_atom(self: Parser) -> Term raise ParserError {
   }
 }
 
-pub fn parse(input: String) -> Term raise {
+pub fn parse(input: String) -> Expr raise {
   let tokens = Lexer::new(input).tokenise()
   Parser::new(tokens).parse()
 }
 
 test "parser" {
-  fn expect_term(input: String, expected_term: Term) raise {
-    assert_eq(parse(input), expected_term)
+  fn expect_expr(input: String, expected_expr: Expr) raise {
+    assert_eq(parse(input), expected_expr)
   }
 
-  fn expect_term_err(input: String, expected_err: ParserError) raise {
+  fn expect_Expr_err(input: String, expected_err: ParserError) raise {
     let tokens = Lexer::new(input).tokenise()
 
     try Parser::new(tokens).parse() catch {
@@ -357,31 +359,40 @@ test "parser" {
     }
   }
 
-  expect_term("*", Star)
-  expect_term("□", Box)
-  expect_term("Box", Box)
-  expect_term("Bool", Bool)
-  expect_term("Bool -> Bool", Pi(None, Bool, Bool))
-  expect_term("Bool -> Bool -> Bool", Pi(None, Bool, Pi(None, Bool, Bool)))
-  expect_term("A", FreeVar("A", 0))
-  expect_term("P", FreeVar("P", 0))
-  expect_term("Q71", FreeVar("Q71", 0))
-  expect_term("P -> Q -> (P -> Bool -> R)",  Pi(None, FreeVar("P", 0), Pi(None, FreeVar("Q", 1), Pi(None, FreeVar("P", 0), Pi(None, Bool, FreeVar("R", 2))))))
-  expect_term("true", Const(Bool(true)))
-  expect_term("false", Const(Bool(false)))
-  expect_term("x", FreeVar("x", 0))
-  expect_term("(true: Bool)", Ann(Const(Bool(true)), Bool))
-  expect_term("fun x: Bool => x", Lam("x", Bool, BoundVar(0)))
-  expect_term("fun x: Bool => y", Lam("x", Bool, FreeVar("y", 0)))
-  expect_term("fun x: A => x", Lam("x", FreeVar("A", 0), BoundVar(0)))
-  expect_term("fun x: A => (x: A)", Lam("x", FreeVar("A", 0), Ann(BoundVar(0), FreeVar("A", 0))))
-  expect_term("fun x: A => fun y: B => x", Lam("x", FreeVar("A", 0), Lam("y", FreeVar("B", 1), BoundVar(1))))
-  expect_term("f x", App(FreeVar("f", 0), FreeVar("x", 1)))
-  expect_term("(fun x: Bool => x) true", App(Lam("x", Bool, BoundVar(0)), Const(Bool(true))))
-  expect_term("(fun f: (Bool -> Bool) => f true) (fun x: Bool => x)", App(Lam("x", Pi(None, Bool, Bool), App(BoundVar(0), Const(Bool(true)))), Lam("x", Bool, BoundVar(0))))
-  expect_term("forall A: *, A", Pi(Some("A"), Star, BoundVar(0)))
-  expect_term("forall b: Bool, b", Pi(Some("b"), Bool, BoundVar(0)))
-  expect_term("fun T: * => forall x: T, T", Lam("T", Star, Pi(Some("x"), BoundVar(0), BoundVar(1))))
+  expect_expr("*", Star)
+  expect_expr("□", Box)
+  expect_expr("Box", Box)
+  expect_expr("Bool", Bool)
+  expect_expr("Bool -> Bool", Pi(None, Bool, Bool))
+  expect_expr("Bool -> Bool -> Bool", Pi(None, Bool, Pi(None, Bool, Bool)))
+  expect_expr("A", Var("A"))
+  expect_expr("P", Var("P"))
+  expect_expr("Q71", Var("Q71"))
+  expect_expr("P -> Q -> (P -> Bool -> R)",  Pi(None, Var("P"), Pi(None, Var("Q"), Pi(None, Var("P"), Pi(None, Bool, Var("R"))))))
+  expect_expr("true", Const(Bool(true)))
+  expect_expr("false", Const(Bool(false)))
+  expect_expr("x", Var("x"))
+  expect_expr("(true: Bool)", Ann(Const(Bool(true)), Bool))
+  expect_expr("fun x: Bool => x", Fun("x", Bool, Var("x")))
+  expect_expr("fun x: Bool => y", Fun("x", Bool, Var("y")))
+  expect_expr("fun x: A => x", Fun("x", Var("A"), Var("x")))
+  expect_expr("fun x: A => (x: A)", Fun("x", Var("A"), Ann(Var("x"), Var("A"))))
+  expect_expr("fun x: A => fun y: B => x", Fun("x", Var("A"), Fun("y", Var("B"), Var("x"))))
+  expect_expr("f x", App(Var("f"), Var("x")))
+  expect_expr("(fun x: Bool => x) true", App(Fun("x", Bool, Var("x")), Const(Bool(true))))
+  expect_expr("(fun f: (Bool -> Bool) => f true) (fun x: Bool => x)", App(Fun("f", Pi(None, Bool, Bool), App(Var("f"), Const(Bool(true)))), Fun("x", Bool, Var("x"))))
+  expect_expr("forall A: *, A", Pi(Some("A"), Star, Var("A")))
+  expect_expr("forall b: Bool, b", Pi(Some("b"), Bool, Var("b")))
+  expect_expr("fun T: * => forall x: T, T", Fun("T", Star, Pi(Some("x"), Var("T"), Var("T"))))
+  expect_expr(
+    "let id: forall A: *, A -> A = fun A: * => fun x: A => x in id Bool true",
+    Let(
+      name="id",
+      ty=Pi(Some("A"), Star, Pi(None, Var("A"), Var("A"))),
+      val=Fun("A", Star, Fun("x", Var("A"), Var("x"))),
+      rhs=App(App(Var("id"), Bool), Const(Bool(true)))
+    )
+  )
   
-  expect_term_err("true)", UnexpectedToken(Rparen))
+  expect_Expr_err("true)", UnexpectedToken(Rparen))
 }
