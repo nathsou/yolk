@@ -247,11 +247,11 @@ fn Parser::parse_term(self: Parser) -> Term raise ParserError {
 fn Parser::parse_fun(self: Parser) -> Term raise ParserError {
   self.expect(Fun)
   let v = self.expect_var()
-  self.bound_vars.push(v)
-  defer { let _ = self.bound_vars.unsafe_pop() }
   self.expect(Colon)
   let ty = self.parse_term()
   self.expect(ThickArrow)
+  self.bound_vars.push(v)
+  defer { let _ = self.bound_vars.unsafe_pop() }
   let body = self.parse_term()
   Lam(v, ty, body) 
 }
@@ -259,11 +259,11 @@ fn Parser::parse_fun(self: Parser) -> Term raise ParserError {
 fn Parser::parse_forall(self: Parser) -> Term raise ParserError {
   self.expect(Forall)
   let v = self.expect_var()
-  self.bound_vars.push(v)
-  defer { let _ = self.bound_vars.unsafe_pop() }
   self.expect(Colon)
   let ty = self.parse_term()
   self.expect(Comma)
+  self.bound_vars.push(v)
+  defer { let _ = self.bound_vars.unsafe_pop() }
   let rhs = self.parse_term()
   Pi(Some(v), ty, rhs)
 }
@@ -310,7 +310,7 @@ fn Parser::parse_atom(self: Parser) -> Term raise ParserError {
         var_id
       }
 
-      FreeVar(var_id)
+      FreeVar(v, var_id)
     }
     Bool => { self.advance(); Bool }
     Star => { self.advance(); Star }
@@ -363,22 +363,25 @@ test "parser" {
   expect_term("Bool", Bool)
   expect_term("Bool -> Bool", Pi(None, Bool, Bool))
   expect_term("Bool -> Bool -> Bool", Pi(None, Bool, Pi(None, Bool, Bool)))
-  expect_term("A", FreeVar(0))
-  expect_term("P", FreeVar(0))
-  expect_term("Q71", FreeVar(0))
-  expect_term("P -> Q -> (P -> Bool -> R)",  Pi(None, FreeVar(0), Pi(None, FreeVar(1), Pi(None, FreeVar(0), Pi(None, Bool, FreeVar(2))))))
+  expect_term("A", FreeVar("A", 0))
+  expect_term("P", FreeVar("P", 0))
+  expect_term("Q71", FreeVar("Q71", 0))
+  expect_term("P -> Q -> (P -> Bool -> R)",  Pi(None, FreeVar("P", 0), Pi(None, FreeVar("Q", 1), Pi(None, FreeVar("P", 0), Pi(None, Bool, FreeVar("R", 2))))))
   expect_term("true", Const(Bool(true)))
   expect_term("false", Const(Bool(false)))
-  expect_term("x", FreeVar(0))
+  expect_term("x", FreeVar("x", 0))
   expect_term("(true: Bool)", Ann(Const(Bool(true)), Bool))
   expect_term("fun x: Bool => x", Lam("x", Bool, BoundVar(0)))
-  expect_term("fun x: Bool => y", Lam("x", Bool, FreeVar(0)))
-  expect_term("fun x: A => x", Lam("x", FreeVar(0), BoundVar(0)))
-  expect_term("fun x: A => (x: A)", Lam("x", FreeVar(0), Ann(BoundVar(0), FreeVar(0))))
-  expect_term("fun x: A => fun y: B => x", Lam("x", FreeVar(0), Lam("y", FreeVar(1), BoundVar(1))))
-  expect_term("f x", App(FreeVar(0), FreeVar(1)))
+  expect_term("fun x: Bool => y", Lam("x", Bool, FreeVar("y", 0)))
+  expect_term("fun x: A => x", Lam("x", FreeVar("A", 0), BoundVar(0)))
+  expect_term("fun x: A => (x: A)", Lam("x", FreeVar("A", 0), Ann(BoundVar(0), FreeVar("A", 0))))
+  expect_term("fun x: A => fun y: B => x", Lam("x", FreeVar("A", 0), Lam("y", FreeVar("B", 1), BoundVar(1))))
+  expect_term("f x", App(FreeVar("f", 0), FreeVar("x", 1)))
   expect_term("(fun x: Bool => x) true", App(Lam("x", Bool, BoundVar(0)), Const(Bool(true))))
   expect_term("(fun f: (Bool -> Bool) => f true) (fun x: Bool => x)", App(Lam("x", Pi(None, Bool, Bool), App(BoundVar(0), Const(Bool(true)))), Lam("x", Bool, BoundVar(0))))
+  expect_term("forall A: *, A", Pi(Some("A"), Star, BoundVar(0)))
+  expect_term("forall b: Bool, b", Pi(Some("b"), Bool, BoundVar(0)))
+  expect_term("fun T: * => forall x: T, T", Lam("T", Star, Pi(Some("x"), BoundVar(0), BoundVar(1))))
   
   expect_term_err("true)", UnexpectedToken(Rparen))
 }
