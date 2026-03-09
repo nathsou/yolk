@@ -229,12 +229,12 @@ fn Parser::expect(self: Parser, expected: Token) -> Unit raise ParserError {
   }
 }
 
-fn Parser::expect_BoundVar(self: Parser) -> String raise ParserError {
+fn Parser::expect_var(self: Parser) -> String raise ParserError {
   if self.peek() is Var(v) {
     self.advance()
     v
   } else {
-    raise Message("Expected BoundVariable")
+    raise Message("Expected variable")
   }
 }
 
@@ -257,7 +257,7 @@ fn Parser::parse_expr(self: Parser) -> Expr raise ParserError {
 
 fn Parser::parse_abs(self: Parser) -> Expr raise ParserError {
   self.expect(Fun)
-  let v = self.expect_BoundVar()
+  let v = self.expect_var()
   self.variables.push(v)
   defer { let _ = self.variables.unsafe_pop() }
   
