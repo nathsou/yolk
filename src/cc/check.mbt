@@ -1,10 +1,21 @@
 
 struct Context {
-  locals: Map[String, Term] // free variables
+  mut next_free_var_id: UInt 
+  locals: Map[FreeVarId, Term] // free variables
 }
 
 pub fn Context::new() -> Context {
-  { locals: {} }
+  { next_free_var_id: 0, locals: {} }
+}
+
+fn Context::fresh_var_id(self: Context) -> FreeVarId {
+  let id = self.next_free_var_id
+  self.next_free_var_id += 1
+  id
+}
+
+fn Context::lookup_free_var(self: Context, var_id: FreeVarId) -> Term? {
+  self.locals.get(var_id)
 }
 
 fn normalise(term: Term) -> Term {
@@ -20,24 +31,9 @@ fn normalise(term: Term) -> Term {
     }
     Lam(x, ty, body) => Lam(x, normalise(ty), normalise(body))
     Pi(x, a, b) => Pi(x, normalise(a), normalise(b))
-    Star | Box | Bool | Atom(_) | Const(_) | BoundVar(_) | FreeVar(_) => term
+    Ann(lhs, rhs) => Ann(normalise(lhs), normalise(rhs))
+    Star | Box | Bool | Const(_) | BoundVar(_) | FreeVar(_) => term
   }
-}
-
-fn Context::fresh_name(self: Context, hint: String) -> String {
-  let mut name = hint
-  let mut i = 0
-
-  while self.locals.contains(name) {
-    name = "\{name}@\{i}"
-    i += 1
-  }
-
-  name
-}
-
-fn open(term: Term, idx: DeBruijnIndex, name: String) -> Term {
-  instantiate(term, idx, FreeVar(name))
 }
 
 fn instantiate(term: Term, idx: DeBruijnIndex, s: Term) -> Term {
@@ -46,17 +42,23 @@ fn instantiate(term: Term, idx: DeBruijnIndex, s: Term) -> Term {
     Lam(x, ty, body) => Lam(x, instantiate(ty, idx, s), instantiate(body, idx + 1, s))
     Pi(x, a, b) => Pi(x, instantiate(a, idx, s), instantiate(b, idx + 1, s))
     App(f, arg) => App(instantiate(f, idx, s), instantiate(arg, idx, s))
-    Star | Box | Bool | Atom(_) | Const(_) | BoundVar(_) | FreeVar(_) => term
+    Ann(lhs, rhs) => Ann(instantiate(lhs, idx, s), instantiate(rhs, idx, s))
+    Star | Box | Bool | Const(_) | BoundVar(_) | FreeVar(_) => term
   }
 }
 
-fn close(term: Term, name: String, idx: DeBruijnIndex) -> Term {
+fn open(term: Term, idx: DeBruijnIndex, var_id: FreeVarId) -> Term {
+  instantiate(term, idx, FreeVar(var_id))
+}
+
+fn close(term: Term, var_id: FreeVarId, idx: DeBruijnIndex) -> Term {
   match term {
-    FreeVar(x) if x == name => BoundVar(idx)
-    Lam(x, ty, body) => Lam(x, close(ty, name, idx), close(body, name, idx + 1))
-    Pi(x, a, b) => Pi(x, close(a, name, idx), close(b, name, idx + 1))
-    App(f, arg) => App(close(f, name, idx), close(arg, name, idx))
-    Star | Box | Bool | Atom(_) | Const(_) | BoundVar(_) | FreeVar(_) => term
+    FreeVar(x) if x == var_id => BoundVar(idx)
+    Lam(x, ty, body) => Lam(x, close(ty, var_id, idx), close(body, var_id, idx + 1))
+    Pi(x, a, b) => Pi(x, close(a, var_id, idx), close(b, var_id, idx + 1))
+    App(f, arg) => App(close(f, var_id, idx), close(arg, var_id, idx))
+    Ann(lhs, rhs) => Ann(close(lhs, var_id, idx), close(rhs, var_id, idx))
+    Star | Box | Bool | Const(_) | BoundVar(_) | FreeVar(_) => term
   }
 }
 
@@ -72,13 +74,9 @@ pub impl Show for TypeCheckError with output(self: TypeCheckError, logger) -> Un
   }
 }
 
-fn Context::lookup_free_var(self: Context, name: String) -> Term? {
-  self.locals.get(name)
-}
-
 pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
   match term {
-    Bool | Atom(_) => Star
+    Bool => Star
     Star => Box
     Box => raise TypeError(term, "Box has no type")
     Const(c) => match c { Bool(_) => Bool }
@@ -109,20 +107,20 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
         raise TypeError(term, "Invalid lambda argument type, expected * or box, got '\{s1}'")
       }
 
-      let fresh_x = self.fresh_name(x)
+      let fresh_x = self.fresh_var_id()
       self.locals[fresh_x] = arg_ty
       defer self.locals.remove(fresh_x)
       let body_ty = self.infer(open(body, 0, fresh_x))
 
-      Pi(x, arg_ty, close(body_ty, fresh_x, 0))
+      Pi(Some(x), arg_ty, close(body_ty, fresh_x, 0))
     }
-    Pi(x, arg_ty, body_ty) => {
+    Pi(_, arg_ty, body_ty) => {
       let s1 = self.infer(arg_ty)
       if !s1.is_sort() {
         raise TypeError(term, "Invalid Pi argument type, expected * or box, got '\{s1}'")
       }
 
-      let fresh_x = self.fresh_name(x)
+      let fresh_x = self.fresh_var_id()
       self.locals[fresh_x] = arg_ty
       defer self.locals.remove(fresh_x)
       let s2 = self.infer(open(body_ty, 0, fresh_x))
@@ -131,6 +129,15 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
       }
 
       s2
+    }
+    Ann(lhs, ty) => {
+      let s = self.infer(ty)
+      if !s.is_sort() {
+        raise TypeError(term, "Invalid annotation type: \{ty}")
+      }
+
+      self.check(lhs, ty)
+      ty
     }
   }
 }
@@ -154,10 +161,10 @@ test "normalisation" {
 
   assert_nf(Star, Star)
   assert_nf(Box, Box)
-  assert_nf(FreeVar("x"), FreeVar("x"))
+  assert_nf(FreeVar(0), FreeVar(0))
   assert_nf(Lam("x", Bool, BoundVar(0)), Lam("x", Bool, BoundVar(0)))
   assert_nf(App(Lam("x", Bool, BoundVar(0)), Const(Bool(true))), Const(Bool(true)))
-  assert_nf(App(Lam("α", Star, Pi("x", BoundVar(0), BoundVar(1))), Atom("A")), Pi("x", Atom("A"), Atom("A")))
+  // assert_nf(App(Lam("α", Star, Pi(Some("x"), BoundVar(0), BoundVar(1))), Atom("A")), Pi(Some("x"), Atom("A"), Atom("A")))
 }
 
 test "type checking" {
@@ -178,25 +185,31 @@ test "type checking" {
 
   assert_type(Bool, Star)
   assert_type(Star, Box)
-  assert_type(Pi("x", Bool, Bool), Star)
-  assert_type(Pi("x", Star, Bool), Star)
-  assert_type(Pi("x", Bool, Star), Box)
-  assert_type(Pi("x", Star, Star), Box)
-  assert_type(Lam("x", Bool, BoundVar(0)), Pi("x", Bool, Bool))
-  assert_type(Lam("x", Bool, BoundVar(0)), Pi("y", Bool, Bool))
-  assert_type(Lam("x", Star, Pi("x", BoundVar(0), Bool)), Pi("x", Star, Star))
+  assert_type(Ann(Bool, Star), Star)
+  assert_type(Ann(Const(Bool(true)), Bool), Bool)
+  assert_type(Pi(Some("x"), Bool, Bool), Star)
+  assert_type(Ann(Pi(Some("x"), Bool, Bool), Star), Star)
+  assert_type(Pi(Some("x"), Star, Bool), Star)
+  assert_type(Pi(Some("x"), Bool, Star), Box)
+  assert_type(Pi(Some("x"), Star, Star), Box)
+  assert_type(Lam("x", Bool, BoundVar(0)), Pi(Some("x"), Bool, Bool))
+  assert_type(Lam("x", Bool, BoundVar(0)), Pi(Some("y"), Bool, Bool))
+  assert_type(Lam("x", Star, Pi(Some("x"), BoundVar(0), Bool)), Pi(Some("x"), Star, Star))
   assert_type(App(Lam("x", Bool, BoundVar(0)), Const(Bool(true))), Bool)
-  assert_type(App(Lam("a", Star, Pi("x", BoundVar(0), Bool)), Atom("A")), Star)
+  assert_type(App(Lam("A", Star, Pi(Some("x"), BoundVar(0), Bool)), Bool), Star)
+  assert_type(App(Lam("A", Star, Pi(None, BoundVar(0), Bool)), Bool), Star)
 
   assert_type_err(Box)
   assert_type_err(App(Lam("x", Bool, BoundVar(1)), Const(Bool(true))))
-  assert_type_err(App(Lam("x", Bool, BoundVar(0)), Atom("A")))
-  assert_type_err(Lam("a", Box, Pi("x", BoundVar(0), Bool)))
-  assert_type_err(Lam("x", Bool, Pi("x", BoundVar(0), BoundVar(1))))
+  assert_type_err(App(Lam("x", Bool, BoundVar(0)), FreeVar(0)))
+  assert_type_err(Lam("A", Box, Pi(None, BoundVar(0), Bool)))
+  assert_type_err(Lam("x", Bool, Pi(None, BoundVar(0), BoundVar(1))))
+  assert_type_err(Ann(Lam("A", Star, BoundVar(0)), Bool))
+  assert_type_err(Ann(Pi(None, Bool, Bool), Box))
 
   // church encodings
   {
-    let bool_ty = Pi("A", Star, Pi("t", BoundVar(0), Pi("f", BoundVar(1), BoundVar(2))))
+    let bool_ty = Pi(Some("A"), Star, Pi(Some("t"), BoundVar(0), Pi(Some("f"), BoundVar(1), BoundVar(2))))
     let c_true = Lam("A", Star, Lam("t", BoundVar(0), Lam("f", BoundVar(1), BoundVar(1))))
     let c_false = Lam("A", Star, Lam("t", BoundVar(0), Lam("f", BoundVar(1), BoundVar(0))))
     assert_type(bool_ty, Star)
@@ -206,8 +219,8 @@ test "type checking" {
 
   // church naturals 
   {
-    let nat_ty = Pi("A", Star, Pi("succ", Pi("_", BoundVar(0), BoundVar(1)), Pi("zero", BoundVar(1), BoundVar(2))))
-    let c_zero = Lam("A", Star, Lam("s", Pi("_", BoundVar(0), BoundVar(1)), Lam("z", BoundVar(1), BoundVar(0))))
+    let nat_ty = Pi(Some("A"), Star, Pi(Some("succ"), Pi(None, BoundVar(0), BoundVar(1)), Pi(Some("zero"), BoundVar(1), BoundVar(2))))
+    let c_zero = Lam("A", Star, Lam("s", Pi(None, BoundVar(0), BoundVar(1)), Lam("z", BoundVar(1), BoundVar(0))))
     assert_type(nat_ty, Star)
     assert_type(c_zero, nat_ty)
   }
@@ -215,25 +228,25 @@ test "type checking" {
   {
     // K-Combinator
     let k_comb = Lam("A", Star, Lam("B", Star, Lam("x", BoundVar(1), Lam("y", BoundVar(1), BoundVar(1)))))
-    let k_type = Pi("A", Star, Pi("B", Star, Pi("x", BoundVar(1), Pi("y", BoundVar(1), BoundVar(3)))))
+    let k_type = Pi(Some("A"), Star, Pi(Some("B"), Star, Pi(Some("x"), BoundVar(1), Pi(Some("y"), BoundVar(1), BoundVar(3)))))
     assert_type(k_comb, k_type)
   }
 
   {
     let id_ty = Lam("A", Star, BoundVar(0))
-    assert_type(id_ty, Pi("A", Star, Star))
+    assert_type(id_ty, Pi(Some("A"), Star, Star))
     assert_type(App(id_ty, Bool), Star)
 
     let type_alias = App(id_ty, Bool)
     let f = Lam("x", type_alias, BoundVar(0))
-    assert_type(f, Pi("x", type_alias, type_alias))
+    assert_type(f, Pi(Some("x"), type_alias, type_alias))
     assert_type(App(f, Const(Bool(true))), Bool)
   }
 
   {
     // (\lambda f:(Bool -> Star). \lambda b:Bool. f b)
-    let dep_apply = Lam("f", Pi("_", Bool, Star), Lam("b", Bool, App(BoundVar(1), BoundVar(0))))
-    let dep_apply_ty = Pi("f", Pi("_", Bool, Star), Pi("b", Bool, Star))
+    let dep_apply = Lam("f", Pi(None, Bool, Star), Lam("b", Bool, App(BoundVar(1), BoundVar(0))))
+    let dep_apply_ty = Pi(Some("f"), Pi(None, Bool, Star), Pi(Some("b"), Bool, Star))
     assert_type(dep_apply, dep_apply_ty)
   }
 

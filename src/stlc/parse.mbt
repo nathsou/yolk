@@ -2,7 +2,7 @@
 pub enum Token {
   Lparen
   Rparen
-  FatArrow
+  ThickArrow
   Arrow
   Fun
   Colon
@@ -123,7 +123,7 @@ fn Lexer::next(self: Lexer) -> LexerResult {
     '=' => {
       self.advance()
       if self.consumes('>') {
-        Yay(FatArrow)
+        Yay(ThickArrow)
       } else {
         Grr(UnexpectedChar(char~, index=self.index))
       }
@@ -171,7 +171,7 @@ fn Lexer::next(self: Lexer) -> LexerResult {
   }
 }
 
-pub fn Lexer::tokenize(self: Lexer) -> Array[Token] raise LexerError {
+pub fn Lexer::tokenise(self: Lexer) -> Array[Token] raise LexerError {
   let tokens = []
 
   while true {
@@ -268,7 +268,7 @@ fn Parser::parse_abs(self: Parser) -> Expr raise ParserError {
     None
   }
 
-  self.expect(FatArrow)
+  self.expect(ThickArrow)
   let body = self.parse_expr()
   Expr::Abs(v, ty, body) 
 }
@@ -392,12 +392,12 @@ fn Parser::parse_base_type(self: Parser) -> Type raise ParserError {
 }
 
 pub fn parse(input: String) -> Expr raise {
-  let tokens = Lexer::new(input).tokenize()
+  let tokens = Lexer::new(input).tokenise()
   Parser::new(tokens).parse()
 }
 
 pub fn parse_type(input: String) -> Type raise {
-  let tokens = Lexer::new(input).tokenize()
+  let tokens = Lexer::new(input).tokenise()
   let parser = Parser::new(tokens)
   let ty = parser.parse_type()
 
@@ -414,7 +414,7 @@ test "parser" {
   }
 
   fn expect_expr_fail(input: String, expected_err: ParserError) raise {
-    let tokens = Lexer::new(input).tokenize()
+    let tokens = Lexer::new(input).tokenise()
 
     try Parser::new(tokens).parse() catch {
       err => assert_eq(err, expected_err)
@@ -424,7 +424,7 @@ test "parser" {
   }
 
   fn expect_type(input : String, expected_type : Type) raise {
-    let tokens = Lexer::new(input).tokenize()
+    let tokens = Lexer::new(input).tokenise()
     let actual_type = Parser::new(tokens).parse_type()
     assert_eq(actual_type, expected_type)
   }
