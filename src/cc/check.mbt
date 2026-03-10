@@ -14,6 +14,12 @@ fn Context::fresh_var_id(self: Context) -> FreeVarId {
   id
 }
 
+fn Context::declare_fresh(self: Context, ty: Term) -> FreeVarId {
+  let var_id = self.fresh_var_id()
+  self.locals[var_id] = ty
+  var_id
+}
+
 fn Context::lookup_local_var(self: Context, var_id: FreeVarId) -> Term? {
   self.locals.get(var_id)
 }
@@ -31,6 +37,7 @@ fn normalise(term: Term) -> Term {
     }
     Lam(x, ty, body) => Lam(x, normalise(ty), normalise(body))
     Pi(x, a, b) => Pi(x, normalise(a), normalise(b))
+    Let(_, val, body) => normalise(instantiate(body, 0, val))
     Ann(lhs, rhs) => Ann(normalise(lhs), normalise(rhs))
     Star | Box | Bool | Const(_) | BoundVar(_) | FreeVar(_) | LocalVar(_) => term
   }
@@ -40,8 +47,9 @@ fn instantiate(term: Term, idx: DeBruijnIndex, s: Term) -> Term {
   match term {
     BoundVar(i) if i == idx => s
     Lam(x, ty, body) => Lam(x, instantiate(ty, idx, s), instantiate(body, idx + 1, s))
-    Pi(x, a, b) => Pi(x, instantiate(a, idx, s), instantiate(b, idx + 1, s))
+    Pi(x, a, b) => Pi(x, instantiate(a, idx, s), instantiate(b, if x is Some(_) { idx + 1 } else { idx }, s))
     App(f, arg) => App(instantiate(f, idx, s), instantiate(arg, idx, s))
+    Let(x, val, body) => Let(x, instantiate(val, idx, s), instantiate(body, idx + 1, s))
     Ann(lhs, rhs) => Ann(instantiate(lhs, idx, s), instantiate(rhs, idx, s))
     Star | Box | Bool | Const(_) | BoundVar(_) | FreeVar(_) | LocalVar(_) => term
   }
@@ -55,8 +63,9 @@ fn close(term: Term, var_id: FreeVarId, idx: DeBruijnIndex) -> Term {
   match term {
     LocalVar(_, x) if x == var_id => BoundVar(idx)
     Lam(x, ty, body) => Lam(x, close(ty, var_id, idx), close(body, var_id, idx + 1))
-    Pi(x, a, b) => Pi(x, close(a, var_id, idx), close(b, var_id, idx + 1))
+    Pi(x, a, b) => Pi(x, close(a, var_id, idx), close(b, var_id, if x is Some(_) { idx + 1 } else { idx }))
     App(f, arg) => App(close(f, var_id, idx), close(arg, var_id, idx))
+    Let(x, val, body) => Let(x, close(val, var_id, idx), close(body, var_id, idx + 1))
     Ann(lhs, rhs) => Ann(close(lhs, var_id, idx), close(rhs, var_id, idx))
     Star | Box | Bool | Const(_) | BoundVar(_) | FreeVar(_) | LocalVar(_) => term
   }
@@ -108,12 +117,11 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
         raise TypeError(term, "Invalid lambda argument type, expected * or □, got '\{s1}'")
       }
 
-      let fresh_x = self.fresh_var_id()
-      self.locals[fresh_x] = arg_ty
+      let fresh_x = self.declare_fresh(arg_ty)
       defer self.locals.remove(fresh_x)
       let body_ty = self.infer(open(body, 0, x, fresh_x))
 
-      Pi(x, arg_ty, close(body_ty, fresh_x, 0))
+      Pi(Some(x), arg_ty, close(body_ty, fresh_x, 0))
     }
     Pi(x, arg_ty, body_ty) => {
       let s1 = self.infer(arg_ty)
@@ -121,17 +129,22 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
         raise TypeError(term, "Invalid Pi argument type, expected * or □, got '\{s1}'")
       }
 
-      let fresh_x = self.fresh_var_id()
-      self.locals[fresh_x] = arg_ty
-      defer self.locals.remove(fresh_x)
-      
-      let s2 = close(self.infer(open(body_ty, 0, x, fresh_x)), fresh_x, 0)
+      let s2 = if x is Some(name) {
+        let fresh_x = self.declare_fresh(arg_ty)
+        defer self.locals.remove(fresh_x)
+        close(self.infer(open(body_ty, 0, name, fresh_x)), fresh_x, 0)
+      } else {
+        self.infer(body_ty)
+      }
 
       if !s2.is_sort() {
         raise TypeError(term, "Invalid Pi body type, expected * or □, got '\{s2}'")
       }
 
       s2
+    }
+    Let(_, val, body) => {
+      self.infer(instantiate(body, 0, val))
     }
     Ann(lhs, ty) => {
       let s = self.infer(ty)
@@ -157,16 +170,9 @@ pub fn Context::check(self: Context, term: Term, ty: Term) -> Unit raise TypeChe
   }
 }
 
-fn parse_term(term: String) -> Term raise {
-  let elaborator = Elaborator::new()
-  elaborator.elaborate(parse(term))
-}
-
 test "normalisation" {
   fn assert_nf(term: String, nf: String) -> Unit raise {
-    let nf1 = normalise(parse_term(term))
-    let nf2 = normalise(parse_term(nf))
-    assert_eq(nf1, nf2, msg="Differing normal forms for '\{term}' (\{nf1}) and '\{nf}' (\{nf2})")
+    assert_eq(normalise(parse(term)), parse(nf), msg="unexpected normal form for '\{term}' and '\{nf}'")
   }
 
   assert_nf("*", "*")
@@ -180,19 +186,13 @@ test "normalisation" {
 test "type checking" {
   fn assert_type(term: String, ty: String) -> Unit raise {
     let ctx = Context::new()
-    try {
-      let expected = parse_term(ty)
-      let parsed_term = parse_term(term)
-      ctx.check(parsed_term, expected)
-    } catch {
-      e => fail("Type error when checking '\{term}': \{e}")
-    }
+    ctx.check(parse(term), parse(ty))
   }
 
   fn assert_type_err(term: String) -> Unit raise {
     let ctx = Context::new()
     
-    try ({ let _ = ctx.infer(parse_term(term)) }) catch {
+    try ({ let _ = ctx.infer(parse(term)) }) catch {
       _ => ()
     } noraise {
       _ => fail("Expected type error for '\{term}', but typing succeeded") 
@@ -213,9 +213,10 @@ test "type checking" {
   assert_type("(fun x: Bool => x) true", "Bool")
   assert_type("(fun A: * => A -> Bool) Bool", "*")
   assert_type("fun A: * => fun B: * => A -> B", "forall A: *, forall B: *, *")
+  assert_type("let x = true in fun y: * => x", "forall A: *, Bool")
+  assert_type("let T = Bool -> Bool in fun f: T => fun x: Bool => f x", "(Bool -> Bool) -> Bool -> Bool")
 
   assert_type_err("□")
-  assert_type_err("(Bool: A)")
   assert_type_err("(fun x: Bool => y) true")
   assert_type_err("(fun x: Bool => x) y")
   assert_type_err("fun A: □ => A -> Bool")
