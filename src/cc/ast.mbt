@@ -10,6 +10,7 @@ pub enum Term {
   App(Term, Term)
   Lam(String, Term, Term)
   Pi(String?, Term, Term)
+  // in a dependently-typed language, let-bindings are not just syntactic sugar for (\x. body) val
   Let(String, Term, Term)
   Ann(Term, Term)
 }
@@ -25,6 +26,7 @@ pub fn Term::is_sort(self: Term) -> Bool {
   self is (Star | Box)
 }
 
+// equality should satisfy alpha-equivalence, so we ignore variable names and just compare the structure of the term
 pub impl Eq for Term with equal(self: Term, other: Term) -> Bool {
   match (self, other) {
     (Box, Box) => true
@@ -32,7 +34,7 @@ pub impl Eq for Term with equal(self: Term, other: Term) -> Bool {
     (Bool, Bool) => true
     (Const(c1), Const(c2)) => c1 == c2
     (BoundVar(i), BoundVar(j)) => i == j
-    (FreeVar(_, x), FreeVar(_, y)) => x == y
+    (FreeVar(_, id1), FreeVar(_, id2)) => id1 == id2
     (App(f, x), App(g, y)) => x == y && f == g
     (Lam(_, t1, body1), Lam(_, t2, body2)) => t1 == t2 && body1 == body2
     (Pi(_, a1, b1), Pi(_, a2, b2)) => a1 == a2 && b1 == b2
@@ -42,13 +44,23 @@ pub impl Eq for Term with equal(self: Term, other: Term) -> Bool {
   }
 }
 
-pub impl Show for Const with output(self: Const, logger: &Logger) {
-  let str = match self {
-    Bool(true) => "true"
-    Bool(false) => "false"
+fn Term::has_loose_bvar(self: Term, depth: DeBruijnIndex) -> Bool {
+  match self {
+    BoundVar(i) => i == depth
+    App(f, arg) => f.has_loose_bvar(depth) || arg.has_loose_bvar(depth)
+    Lam(_, ty, body) => ty.has_loose_bvar(depth) || body.has_loose_bvar(depth + 1)
+    Pi(x, a, b) => {
+      let b_depth = if x is None { depth } else { depth + 1 }
+      a.has_loose_bvar(depth) || b.has_loose_bvar(b_depth)
+    }
+    Let(_, val, body) => val.has_loose_bvar(depth) || body.has_loose_bvar(depth + 1)
+    Ann(lhs, rhs) => lhs.has_loose_bvar(depth) || rhs.has_loose_bvar(depth)
+    Star | Box | Bool | Const(_) | FreeVar(_) => false
   }
+}
 
-  logger.write_string(str)
+pub impl Show for Const with output(self: Const, logger: &Logger) {
+  logger.write_string(if self is Bool(true) { "true" } else { "false" })
 }
 
 fn Term::parens(self: Term, wrap~: Bool, bindings~: Array[String], depth~: Int, logger: &Logger) -> Unit {

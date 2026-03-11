@@ -1,11 +1,11 @@
 
 struct Context {
   mut next_free_var_id: UInt 
-  locals: Map[FreeVarId, Term] // free variables
+  free_vars: Map[FreeVarId, Term]
 }
 
 pub fn Context::new() -> Context {
-  { next_free_var_id: 0, locals: {} }
+  { next_free_var_id: 0, free_vars: {} }
 }
 
 /// Parses a term from a string, updating the context's next_free_var_id to account for any free variables introduced by the term
@@ -25,12 +25,12 @@ fn Context::fresh_var_id(self: Context) -> FreeVarId {
 
 fn Context::declare_fresh(self: Context, ty: Term) -> FreeVarId {
   let var_id = self.fresh_var_id()
-  self.locals[var_id] = ty
+  self.free_vars[var_id] = ty
   var_id
 }
 
-fn Context::lookup_local_var(self: Context, var_id: FreeVarId) -> Term? {
-  self.locals.get(var_id)
+fn Context::lookup_free_var(self: Context, var_id: FreeVarId) -> Term? {
+  self.free_vars.get(var_id)
 }
 
 fn Context::normalise(self: Context, term: Term) -> Term {
@@ -47,32 +47,39 @@ fn Context::normalise(self: Context, term: Term) -> Term {
     Lam(x, ty, body) => {
       // 1. Generate a fresh FreeVar
       let fresh_x = self.declare_fresh(ty)
-      defer self.locals.remove(fresh_x)
+      defer self.free_vars.remove(fresh_x)
       
       // 2. Open the binder, replacing BoundVar(0) with the FreeVar
       let opened = open(body, 0, x, fresh_x)
       
       // 3. Normalise the locally closed body
       let norm_body = self.normalise(opened)
-      
+
       // 4. Close the FreeVar back into BoundVar(0)
-      Lam(x, self.normalise(ty), close(norm_body, fresh_x, 0))
+      let closed = close(norm_body, fresh_x, 0)
+      
+      // 5. eta-conversion: (fun x => f x) <=> f, when x is not free in f
+      if closed is App(f, BoundVar(0)) && !f.has_loose_bvar(0) {
+        return f
+      }
+
+      Lam(x, self.normalise(ty), closed)
     }
     Pi(x, a, b) => {
       let a_norm = self.normalise(a)
       let b_norm = if x is Some(name) {
         let fresh_x = self.declare_fresh(a)
-        defer self.locals.remove(fresh_x)
+        defer self.free_vars.remove(fresh_x)
         
         let opened = open(b, 0, name, fresh_x)
         close(self.normalise(opened), fresh_x, 0)
       } else {
         self.normalise(b)
       }
-      
+
       Pi(x, a_norm, b_norm)
     }
-    Let(_, val, body) => self.normalise(instantiate(body, 0, val))
+    Let(_, val, body) => self.normalise(instantiate(self.normalise(body), 0, self.normalise(val)))
     Ann(lhs, _) => self.normalise(lhs)
     Star | Box | Bool | Const(_) | BoundVar(_) | FreeVar(_) => term
   }
@@ -126,7 +133,7 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
     Const(c) => match c { Bool(_) => Bool }
     BoundVar(_) => raise TypeError(term, "BoundVar")
     FreeVar(name, var_id) => {
-      if self.lookup_local_var(var_id) is Some(t) {
+      if self.lookup_free_var(var_id) is Some(t) {
         t
       } else {
         raise TypeError(term, "Unbound variable '\{name}'")
@@ -148,7 +155,7 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
       }
 
       let fresh_x = self.declare_fresh(arg_ty)
-      defer self.locals.remove(fresh_x)
+      defer self.free_vars.remove(fresh_x)
       let body_ty = self.infer(open(body, 0, x, fresh_x))
 
       Pi(Some(x), arg_ty, close(body_ty, fresh_x, 0))
@@ -161,7 +168,7 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
 
       let s2 = if x is Some(name) {
         let fresh_x = self.declare_fresh(arg_ty)
-        defer self.locals.remove(fresh_x)
+        defer self.free_vars.remove(fresh_x)
         close(self.infer(open(body_ty, 0, name, fresh_x)), fresh_x, 0)
       } else {
         self.infer(body_ty)
@@ -214,6 +221,25 @@ test "normalisation" {
   assert_nf("fun x: Bool => x", "fun x: Bool => x")
   assert_nf("(fun x: Bool => x) true", "true")
   assert_nf("(fun T: * => forall x: T, T) A", "A -> A")
+
+  // eta-conversion
+  assert_nf("fun f: Bool -> Bool => fun x: Bool => f x", "fun f: Bool -> Bool => f")
+  assert_nf("fun f: Bool -> Bool -> Bool => fun x: Bool => f x x", "fun f: Bool -> Bool -> Bool => fun x: Bool => f x x")
+  assert_nf("fun f: Bool -> Bool => fun x: Bool => f (f x)", "fun f: Bool -> Bool => fun x: Bool => f (f x)")
+  assert_nf("fun x: Bool -> Bool => x x", "fun x: Bool -> Bool => x x")
+  
+  // let expressions
+  assert_nf("let x = true in x", "true")
+  assert_nf("let f = fun x: Bool => x in f true", "true")
+  assert_nf("let id = fun A: * => fun x: A => x in id Bool true", "true")
+  assert_nf("let const = fun A: * => fun B: * => fun x: A => fun y: B => x in const Bool Bool true false", "true")
+
+  // beta reduction
+  assert_nf("(fun p: Bool -> Bool => p true) (fun x: Bool => x)", "true")
+  
+  // complex applications
+  assert_nf("(fun A: * => fun x: A => x) Bool true", "true")
+  assert_nf("(fun f: Bool -> Bool => fun x: Bool => f (f x)) (fun x: Bool => x) true", "true")
 }
 
 test "type checking" {
@@ -308,4 +334,60 @@ test "type checking" {
   
   // trying to declare types at the box level
   assert_type_err("fun x: □ => x")
+
+  // let bindings
+  assert_type("let id = fun x: Bool => x in id", "Bool -> Bool")
+  assert_type("let T = Bool in (true: T)", "Bool")
+  assert_type("let T = * in let U = T in (Bool: U)", "*")
+
+  // dependent pair and logical operations
+  assert_type("forall A: *, forall B: A -> *, *", "□")
+  assert_type("fun A: * => fun B: * => forall C: *, (A -> B -> C) -> C", "forall A: *, forall B: *, *")
+
+  // function abstraction validation
+  assert_type_err("fun x: true => x")
+  assert_type("fun A: * => fun P: A -> * => fun a: A => P a", "forall A: *, forall P: A -> *, forall a: A, *")
+
+  // universe applications
+  assert_type("(fun A: * => fun x: A => x) Bool", "Bool -> Bool")
+  assert_type_err("(fun A: □ => fun x: A => x) *")
+
+  // logical operations (Church encoding)
+  {
+    // Conjunction (and)
+    let and_ty = "fun A: * => fun B: * => forall C: *, (A -> B -> C) -> C"
+    assert_type(and_ty, "forall A: *, forall B: *, *")
+    
+    // Pair constructor for and: fun A, B, a, b, C, f => f a b
+    let pair = "fun A: * => fun B: * => fun a: A => fun b: B => fun C: * => fun f: A -> B -> C => f a b"
+    let pair_ty = "forall A: *, forall B: *, forall a: A, forall b: B, forall C: *, forall f: A -> B -> C, C"
+    assert_type(pair, pair_ty)
+
+    // Disjunction (or)
+    let or_ty = "fun A: * => fun B: * => forall C: *, (A -> C) -> (B -> C) -> C"
+    assert_type(or_ty, "forall A: *, forall B: *, *")
+
+    // Left constructor for or: fun A, B, a, C, l, r => l a
+    let left = "fun A: * => fun B: * => fun a: A => fun C: * => fun l: A -> C => fun r: B -> C => l a"
+    let left_ty = "forall A: *, forall B: *, forall a: A, forall C: *, forall l: A -> C, forall r: B -> C, C"
+    assert_type(left, left_ty)
+
+    // Right constructor for or: fun A, B, b, C, l, r => r b
+    let right = "fun A: * => fun B: * => fun b: B => fun C: * => fun l: A -> C => fun r: B -> C => r b"
+    let right_ty = "forall A: *, forall B: *, forall b: B, forall C: *, forall l: A -> C, forall r: B -> C, C"
+    assert_type(right, right_ty)
+
+    // False is the type that takes any type and returns it
+    let false_ty = "forall X: *, X"
+    assert_type(false_ty, "*")
+
+    // Negation (not) is A -> False
+    let not_ty = "fun A: * => A -> (\{false_ty})"
+    assert_type(not_ty, "forall A: *, *")
+
+    // Law of Non-contradiction: not (A and (not A))
+    let ncontra = "fun A: * => fun p: (forall C: *, (A -> (A -> (\{false_ty})) -> C) -> C) => p (\{false_ty}) (fun a: A => fun na: A -> (\{false_ty}) => na a)"
+    let ncontra_ty = "forall A: *, (forall C: *, (A -> (A -> (\{false_ty})) -> C) -> C) -> (\{false_ty})"
+    assert_type(ncontra, ncontra_ty)
+  }
 }

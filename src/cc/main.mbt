@@ -7,5 +7,6 @@ fn eval(term: String) -> Term raise {
 }
 
 fn main {
-  println(try? eval("let f = let A = * in fun f: A -> A -> Bool => fun x: A => f x x in let A = Bool -> Bool -> Bool in f (fun x: * => fun y: * => true) (A -> A)"))
+  // println(try? eval("let f = let A = * in fun f: A -> A -> Bool => fun x: A => f x x in let A = Bool -> Bool -> Bool in f (fun x: * => fun y: * => true) (A -> A)"))
+  println(try? eval("fun x: Bool => fun f: Bool -> Bool => fun x: Bool => () x"))
 }
