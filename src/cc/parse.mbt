@@ -1,6 +1,6 @@
 
 pub enum Token {
-  Lparen; Rparen; ThickArrow; Arrow; Star; Box; Fun; Forall; Let; In; Equal
+  Lparen; Rparen; ThickArrow; Arrow; Sort; Prop; Type; Fun; Forall; Let; In; Equal
   Colon; Comma; Dot; True; False; Nat(UInt); Var(String); Bool
 } derive(Show, Eq)
 
@@ -108,8 +108,6 @@ fn Lexer::next(self: Lexer) -> LexerResult {
     ':' => { self.advance(); Yay(Colon) }
     ',' => { self.advance(); Yay(Comma) }
     '.' => { self.advance(); Yay(Dot) }
-    '*' => { self.advance(); Yay(Star) }
-    '□' => { self.advance(); Yay(Box) }
     '=' => {
       self.advance()
       if self.consumes('>') {
@@ -138,7 +136,9 @@ fn Lexer::next(self: Lexer) -> LexerResult {
           "true" => Yay(True)
           "false" => Yay(False)
           "Bool" => Yay(Bool)
-          "Box" => Yay(Box)
+          "Sort" => Yay(Sort)
+          "Prop" => Yay(Prop)
+          "Type" => Yay(Type)
           _ => {
             Yay(Var(identifier))
           }
@@ -191,6 +191,10 @@ pub suberror ParserError {
 
 pub fn Parser::new(tokens: Array[Token]) -> Parser {
   { tokens, bound_vars: [], free_vars: {}, index: 0 }
+}
+
+fn Parser::has_next(self: Parser) -> Bool {
+  self.index < self.tokens.length()
 }
 
 fn Parser::peek(self: Parser) -> Token raise ParserError {
@@ -328,8 +332,24 @@ fn Parser::parse_atom(self: Parser) -> Term raise ParserError {
       FreeVar(v, var_id)
     }
     Bool => { self.advance(); Bool }
-    Star => { self.advance(); Star }
-    Box => { self.advance(); Box }
+    Prop => { self.advance(); Sort(0) }
+    (Sort | Type) as tok => {
+      self.advance()
+      if self.has_next() && self.peek() is Nat(u) {
+        self.advance()
+        match tok {
+          Sort => Term::Sort(u)
+          _ => Term::Sort(u + 1)
+        }
+      } else {
+        match tok {
+          Sort => {
+            raise Message("Expected universe level after 'Sort'")
+          }
+          _ => Term::Sort(1) // Type 0
+        }
+      }
+    }
     True => { self.advance(); Const(Bool(true)) }
     False => { self.advance(); Const(Bool(false)) }
     Lparen => {
@@ -359,7 +379,9 @@ test "parser" {
   }
 
   fn expect_term(input: String, expected_term: Term) raise {
-    assert_eq(parse(input), expected_term)
+    if !parse(input).alpha_eq(expected_term) {
+      fail("Expected term '\{expected_term}', got '\{parse(input)}'")
+    }
   }
 
   fn expect_term_err(input: String, expected_err: ParserError) raise {
@@ -372,9 +394,12 @@ test "parser" {
     }
   }
 
-  expect_term("*", Star)
-  expect_term("□", Box)
-  expect_term("Box", Box)
+  expect_term("Type", Sort(1))
+  expect_term("Type 0", Sort(1))
+  expect_term("Prop", Sort(0))
+  expect_term("Type 1", Sort(2))
+  expect_term("Type 321", Sort(322))
+  expect_term("Sort 321", Sort(321))
   expect_term("Bool", Bool)
   expect_term("Bool -> Bool", Pi(None, Bool, Bool))
   expect_term("Bool -> Bool -> Bool", Pi(None, Bool, Pi(None, Bool, Bool)))
@@ -394,9 +419,9 @@ test "parser" {
   expect_term("f x", App(FreeVar("f", 0), FreeVar("x", 1)))
   expect_term("(fun x: Bool => x) true", App(Lam("x", Bool, BoundVar(0)), Const(Bool(true))))
   expect_term("(fun f: (Bool -> Bool) => f true) (fun x: Bool => x)", App(Lam("x", Pi(None, Bool, Bool), App(BoundVar(0), Const(Bool(true)))), Lam("x", Bool, BoundVar(0))))
-  expect_term("forall A: *, A", Pi(Some("A"), Star, BoundVar(0)))
+  expect_term("forall A: Type, A", Pi(Some("A"), Sort(1), BoundVar(0)))
   expect_term("forall b: Bool, b", Pi(Some("b"), Bool, BoundVar(0)))
-  expect_term("fun T: * => forall x: T, T", Lam("T", Star, Pi(Some("x"), BoundVar(0), BoundVar(1))))
+  expect_term("fun T: Type 2 => forall x: T, T", Lam("T", Sort(3), Pi(Some("x"), BoundVar(0), BoundVar(1))))
   expect_term("let id = fun x: A => x in id", Let("id", Lam("x", FreeVar("A", 0), BoundVar(0)), BoundVar(0)))
   
   expect_term_err("true)", UnexpectedToken(Rparen))

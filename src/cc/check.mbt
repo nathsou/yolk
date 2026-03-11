@@ -79,9 +79,28 @@ fn Context::normalise(self: Context, term: Term) -> Term {
 
       Pi(x, a_norm, b_norm)
     }
-    Let(_, val, body) => self.normalise(instantiate(self.normalise(body), 0, self.normalise(val)))
+    Let(_, val, body) => self.normalise(instantiate(body, 0, self.normalise(val)))
     Ann(lhs, _) => self.normalise(lhs)
-    Star | Box | Bool | Const(_) | BoundVar(_) | FreeVar(_) => term
+    Sort(_) | Bool | Const(_) | BoundVar(_) | FreeVar(_) => term
+  }
+}
+// Weak Head Normal Form: only reduce the head of the term, and do not recurse under binders
+pub fn Context::whnf(self: Context, term: Term) -> Term {
+  match term {
+    App(f, arg) => {
+      // Only evaluate the function part to see if it's a Lam
+      let f_whnf = self.whnf(f)
+      match f_whnf {
+        Lam(_, _, body) => self.whnf(instantiate(body, 0, arg))
+        _ => App(f_whnf, arg) 
+      }
+    }
+    Let(_, val, body) => {
+      // Zeta reduction
+      self.whnf(instantiate(body, 0, val))
+    }
+    Ann(lhs, _) => self.whnf(lhs)
+    Lam(_) | Pi(_) | Sort(_) | Bool | Const(_) | BoundVar(_) | FreeVar(_) => term
   }
 }
 
@@ -93,7 +112,7 @@ fn instantiate(term: Term, idx: DeBruijnIndex, s: Term) -> Term {
     App(f, arg) => App(instantiate(f, idx, s), instantiate(arg, idx, s))
     Let(x, val, body) => Let(x, instantiate(val, idx, s), instantiate(body, idx + 1, s))
     Ann(lhs, rhs) => Ann(instantiate(lhs, idx, s), instantiate(rhs, idx, s))
-    Star | Box | Bool | Const(_) | BoundVar(_) | FreeVar(_) => term
+    Sort(_) | Bool | Const(_) | BoundVar(_) | FreeVar(_) => term
   }
 }
 
@@ -109,7 +128,7 @@ fn close(term: Term, var_id: FreeVarId, idx: DeBruijnIndex) -> Term {
     App(f, arg) => App(close(f, var_id, idx), close(arg, var_id, idx))
     Let(x, val, body) => Let(x, close(val, var_id, idx), close(body, var_id, idx + 1))
     Ann(lhs, rhs) => Ann(close(lhs, var_id, idx), close(rhs, var_id, idx))
-    Star | Box | Bool | Const(_) | BoundVar(_) | FreeVar(_) => term
+    Sort(_) | Bool | Const(_) | BoundVar(_) | FreeVar(_) => term
   }
 }
 
@@ -127,9 +146,8 @@ pub impl Show for TypeCheckError with output(self: TypeCheckError, logger) -> Un
 
 pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
   match term {
-    Bool => Star
-    Star => Box
-    Box => raise TypeError(term, "□ has no type")
+    Sort(u) => Sort(u + 1) // Prop : Type 0, Type u : Type (u + 1)
+    Bool => Sort(1) // Type 0
     Const(c) => match c { Bool(_) => Bool }
     BoundVar(_) => raise TypeError(term, "BoundVar")
     FreeVar(name, var_id) => {
@@ -140,7 +158,7 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
       }
     }
     App(lhs, rhs) => {
-      match self.normalise(self.infer(lhs)) {
+      match self.whnf(self.infer(lhs)) {
         Pi(_, t0, t1) => {
           self.check(rhs, t0)
           instantiate(t1, 0, rhs)
@@ -150,8 +168,8 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
     }
     Lam(x, arg_ty, body) => {
       let s1 = self.infer(arg_ty)
-      if !s1.is_sort() {
-        raise TypeError(term, "Invalid lambda argument type, expected * or □, got '\{s1}'")
+      if !(self.whnf(s1) is Sort(_)) {
+        raise TypeError(term, "Invalid lambda argument type, got '\{s1}'")
       }
 
       let fresh_x = self.declare_fresh(arg_ty)
@@ -162,8 +180,10 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
     }
     Pi(x, arg_ty, body_ty) => {
       let s1 = self.infer(arg_ty)
-      if !s1.is_sort() {
-        raise TypeError(term, "Invalid Pi argument type, expected * or □, got '\{s1}'")
+      let u1 = if self.whnf(s1) is Sort(u) {
+        u
+      } else {
+        raise TypeError(term, "Invalid Pi argument type, got '\{s1}'")
       }
 
       let s2 = if x is Some(name) {
@@ -174,11 +194,17 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
         self.infer(body_ty)
       }
 
-      if !s2.is_sort() {
-        raise TypeError(term, "Invalid Pi body type, expected * or □, got '\{s2}'")
+      let u2 = if self.whnf(s2) is Sort(u) {
+        u
+      } else {
+        raise TypeError(term, "Invalid Pi body type, got '\{s2}'")
       }
 
-      s2
+      Sort(if u2 == 0 {
+        0 // Impredicativity: If the body is a Prop, the Pi is a Prop
+      } else {
+        u1.max(u2)
+      })
     }
     Let(_, val, body) => {
       // check that val is well-typed
@@ -187,7 +213,7 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
     }
     Ann(lhs, ty) => {
       let s = self.infer(ty)
-      if !s.is_sort() {
+      if !(self.whnf(s) is Sort(_)) {
         raise TypeError(term, "Invalid annotation type: \{ty}")
       }
 
@@ -202,9 +228,32 @@ pub fn Context::check(self: Context, term: Term, ty: Term) -> Unit raise TypeChe
     _ => {
       let inferred_ty_norm = self.normalise(self.infer(term))
       let ty_norm = self.normalise(ty)
-      if inferred_ty_norm != ty_norm {
+      if !self.is_definitionally_equal(inferred_ty_norm, ty_norm) {
+        
         raise TypeError(term, "Expected type '\{ty_norm}', got '\{inferred_ty_norm}'")
       }
+    }
+  }
+}
+
+// TODO: this is currently very naive and normalises both terms fully before comparing them, which is very inefficient.
+// see https://rocq-prover.org/doc/V8.19.0/refman/language/core/conversion.html for how to do this more efficiently by interleaving reduction and comparison
+// and only reducing as much as needed to determine definitional equality
+pub fn Context::is_definitionally_equal(self: Context, term: Term, expected: Term) -> Bool {
+  let t1_norm = self.normalise(term)
+  let t2_norm = self.normalise(expected)
+
+  if t1_norm.alpha_eq(t2_norm) {
+    true
+  } else {
+    // universes are cumulative: Type u <= Type v if u <= v
+    match (t1_norm, t2_norm) {
+      (Sort(u1), Sort(u2)) => u1 <= u2
+      (Pi(_, a1, b1), Pi(_, a2, b2)) => {
+        // Domains must be exactly equal, codomains can be cumulative
+        a1.alpha_eq(a2) && self.is_definitionally_equal(b1, b2)
+      }
+      _ => false
     }
   }
 }
@@ -212,15 +261,17 @@ pub fn Context::check(self: Context, term: Term, ty: Term) -> Unit raise TypeChe
 test "normalisation" {
   fn assert_nf(term: String, nf: String) -> Unit raise {
     let ctx = Context::new()
-    assert_eq(ctx.normalise(ctx.parse(term)), ctx.parse(nf), msg="unexpected normal form for '\{term}' and '\{nf}'")
+    if !ctx.normalise(ctx.parse(term)).alpha_eq(ctx.parse(nf)) {
+      fail("Expected normal form of '\{term}' to be '\{nf}', got '\{ctx.normalise(ctx.parse(term))}'")
+    }
   }
 
-  assert_nf("*", "*")
-  assert_nf("□", "□")
+  assert_nf("Type", "Type")
+  assert_nf("Type 1", "Type 1")
   assert_nf("x", "x")
   assert_nf("fun x: Bool => x", "fun x: Bool => x")
   assert_nf("(fun x: Bool => x) true", "true")
-  assert_nf("(fun T: * => forall x: T, T) A", "A -> A")
+  assert_nf("(fun T: Type => forall x: T, T) A", "A -> A")
 
   // eta-conversion
   assert_nf("fun f: Bool -> Bool => fun x: Bool => f x", "fun f: Bool -> Bool => f")
@@ -231,14 +282,14 @@ test "normalisation" {
   // let expressions
   assert_nf("let x = true in x", "true")
   assert_nf("let f = fun x: Bool => x in f true", "true")
-  assert_nf("let id = fun A: * => fun x: A => x in id Bool true", "true")
-  assert_nf("let const = fun A: * => fun B: * => fun x: A => fun y: B => x in const Bool Bool true false", "true")
+  assert_nf("let id = fun A: Type => fun x: A => x in id Bool true", "true")
+  assert_nf("let const = fun A: Type => fun B: Type => fun x: A => fun y: B => x in const Bool Bool true false", "true")
 
   // beta reduction
   assert_nf("(fun p: Bool -> Bool => p true) (fun x: Bool => x)", "true")
   
   // complex applications
-  assert_nf("(fun A: * => fun x: A => x) Bool true", "true")
+  assert_nf("(fun A: Type => fun x: A => x) Bool true", "true")
   assert_nf("(fun f: Bool -> Bool => fun x: Bool => f (f x)) (fun x: Bool => x) true", "true")
 }
 
@@ -258,58 +309,67 @@ test "type checking" {
     }
   }
 
-  assert_type("Bool", "*")
-  assert_type("*", "□")
-  assert_type("(Bool: *)", "*")
+  assert_type("Prop", "Type")
+  assert_type("Prop", "Type 1") // universe cumulativity
+  assert_type("Bool", "Type")
+  assert_type("Bool", "Type 1998")
+  assert_type("Type", "Type 1")
+  assert_type("Type 0", "Type 1")
+  assert_type("(Bool: Type)", "Type")
   assert_type("(true: Bool)", "Bool")
-  assert_type("Bool -> Bool", "*")
-  assert_type("((Bool -> Bool): *)", "*")
-  assert_type("* -> Bool", "*")
-  assert_type("Bool -> *", "□")
-  assert_type("* -> *", "□")
+  assert_type("Bool -> Bool", "Type")
+  assert_type("((Bool -> Bool): Type)", "Type")
+  assert_type("((Bool -> Bool): Type 1)", "Type 1")
+  assert_type("Type -> Bool", "Type 1")
+  assert_type("Bool -> Type", "Type 1")
+  assert_type("Type -> Type", "Type 1")
+  assert_type("Type 1 -> Type", "Type 2")
+  assert_type("Type 2 -> Type 5", "Type 6")
+  assert_type("Type 5 -> Type 4", "Type 6")
   assert_type("fun x: Bool => x", "Bool -> Bool")
-  assert_type("fun x: * => forall x: x, Bool", "* -> *")
+  assert_type("fun x: Type => forall x: x, Bool", "Type -> Type")
   assert_type("(fun x: Bool => x) true", "Bool")
-  assert_type("(fun A: * => A -> Bool) Bool", "*")
-  assert_type("fun A: * => fun B: * => A -> B", "forall A: *, forall B: *, *")
-  assert_type("let x = true in fun y: * => x", "forall A: *, Bool")
+  assert_type("(fun A: Type => A -> Bool) Bool", "Type")
+  assert_type("fun A: Type => fun B: Type => A -> B", "forall A: Type, forall B: Type, Type")
+  assert_type("let x = true in fun y: Type => x", "forall A: Type, Bool")
   assert_type("let T = Bool -> Bool in fun f: T => fun x: Bool => f x", "(Bool -> Bool) -> Bool -> Bool")
+  assert_type("fun A: Type 1 => A -> Bool", "forall A: Type 1, Type 1")
+  assert_type("fun x: Type 1 => x", "forall x: Type 1, Type 1")
 
-  assert_type_err("□")
   assert_type_err("(fun x: Bool => y) true")
   assert_type_err("(fun x: Bool => x) y")
-  assert_type_err("fun A: □ => A -> Bool")
   assert_type_err("fun x: Bool => x -> y")
-  assert_type_err("((fun A: * => A): Bool)")
-  assert_type_err("((Bool -> Bool): □)")
+  assert_type_err("((fun A: Type => A): Bool)")
+  assert_type_err("(Type 7 : Type 5)")
+  assert_type_err("(Type 7 : Prop)")
 
   // church encodings
   {
-    let bool_ty = "forall A: *, forall t: A, forall f: A, A"
-    assert_type(bool_ty, "*")
-    assert_type("fun A: * => fun t: A => fun f: A => t", bool_ty)
-    assert_type("fun A: * => fun t: A => fun f: A => f", bool_ty)
+    let bool_ty = "forall A: Type, forall t: A, forall f: A, A"
+    assert_type(bool_ty, "Type 1")
+    assert_type("fun A: Type => fun t: A => fun f: A => t", bool_ty)
+    assert_type("fun A: Type => fun t: A => fun f: A => f", bool_ty)
   }
 
   // church naturals 
   {
-    let nat_ty = "forall A: *, forall succ: A -> A, forall zero: A, A"
-    let c_zero = "fun A: * => fun succ: A -> A => fun z: A => z"
-    assert_type(nat_ty, "*")
+    let nat_ty = "forall A: Type, forall succ: A -> A, forall zero: A, A"
+    let c_zero = "fun A: Type => fun succ: A -> A => fun z: A => z"
+    assert_type(nat_ty, "Type 1")
     assert_type(c_zero, nat_ty)
   }
 
   {
     // K-Combinator
-    let k_comb = "fun A: * => fun B: * => fun x: A => fun y: B => x"
-    let k_type = "forall A: *, forall B: *, forall x: A, forall y: B, A"
+    let k_comb = "fun A: Type => fun B: Type => fun x: A => fun y: B => x"
+    let k_type = "forall A: Type, forall B: Type, forall x: A, forall y: B, A"
     assert_type(k_comb, k_type)
   }
 
   {
-    let id_ty = "fun A: * => A"
-    assert_type(id_ty, "* -> *")
-    assert_type("(\{id_ty}) Bool", "*")
+    let id_ty = "fun A: Type => A"
+    assert_type(id_ty, "Type -> Type")
+    assert_type("(\{id_ty}) Bool", "Type")
 
     let type_alias = "((\{id_ty}) Bool)"
     let f = "fun x: \{type_alias} => x"
@@ -318,8 +378,8 @@ test "type checking" {
   }
 
   {
-    let dep_apply = "fun f: Bool -> * => fun b: Bool => f b"
-    let dep_apply_ty = "forall f: Bool -> *, Bool -> *"
+    let dep_apply = "fun f: Bool -> Type => fun b: Bool => f b"
+    let dep_apply_ty = "forall f: Bool -> Type, Bool -> Type"
     assert_type(dep_apply, dep_apply_ty)
   }
 
@@ -327,67 +387,64 @@ test "type checking" {
   assert_type_err("true true")
 
   // un-typable self-application
-  assert_type_err("fun x: * => x x")
+  assert_type_err("fun x: Type => x x")
   
   // applying incorrect type to dependent function
-  assert_type_err("(fun x: Bool => x) *")
-  
-  // trying to declare types at the box level
-  assert_type_err("fun x: □ => x")
+  assert_type_err("(fun x: Bool => x) Prop")  
 
   // let bindings
   assert_type("let id = fun x: Bool => x in id", "Bool -> Bool")
   assert_type("let T = Bool in (true: T)", "Bool")
-  assert_type("let T = * in let U = T in (Bool: U)", "*")
+  assert_type("let T = Type in let U = T in (Bool: U)", "Type")
 
   // dependent pair and logical operations
-  assert_type("forall A: *, forall B: A -> *, *", "□")
-  assert_type("fun A: * => fun B: * => forall C: *, (A -> B -> C) -> C", "forall A: *, forall B: *, *")
+  assert_type("forall A: Type, forall B: A -> Type, Type", "Type 1")
+  assert_type("fun A: Type => fun B: Type => forall C: Type, (A -> B -> C) -> C", "forall A: Type, forall B: Type, Type 1")
 
   // function abstraction validation
   assert_type_err("fun x: true => x")
-  assert_type("fun A: * => fun P: A -> * => fun a: A => P a", "forall A: *, forall P: A -> *, forall a: A, *")
+  assert_type("fun A: Type => fun P: A -> Type => fun a: A => P a", "forall A: Type, forall P: A -> Type, forall a: A, Type")
 
   // universe applications
-  assert_type("(fun A: * => fun x: A => x) Bool", "Bool -> Bool")
-  assert_type_err("(fun A: □ => fun x: A => x) *")
+  assert_type("(fun A: Type => fun x: A => x) Bool", "Bool -> Bool")
+  assert_type("(fun A: Type 1 => fun x: A => x) Bool", "Bool -> Bool")
 
   // logical operations (Church encoding)
   {
     // Conjunction (and)
-    let and_ty = "fun A: * => fun B: * => forall C: *, (A -> B -> C) -> C"
-    assert_type(and_ty, "forall A: *, forall B: *, *")
+    let and_ty = "fun A: Prop => fun B: Prop => forall C: Prop, (A -> B -> C) -> C"
+    assert_type(and_ty, "forall A: Prop, forall B: Prop, Prop")
     
     // Pair constructor for and: fun A, B, a, b, C, f => f a b
-    let pair = "fun A: * => fun B: * => fun a: A => fun b: B => fun C: * => fun f: A -> B -> C => f a b"
-    let pair_ty = "forall A: *, forall B: *, forall a: A, forall b: B, forall C: *, forall f: A -> B -> C, C"
+    let pair = "fun A: Prop => fun B: Prop => fun a: A => fun b: B => fun C: Type => fun f: A -> B -> C => f a b"
+    let pair_ty = "forall A: Prop, forall B: Prop, forall a: A, forall b: B, forall C: Type, forall f: A -> B -> C, C"
     assert_type(pair, pair_ty)
 
     // Disjunction (or)
-    let or_ty = "fun A: * => fun B: * => forall C: *, (A -> C) -> (B -> C) -> C"
-    assert_type(or_ty, "forall A: *, forall B: *, *")
+    let or_ty = "fun A: Prop => fun B: Prop => forall C: Prop, (A -> C) -> (B -> C) -> C"
+    assert_type(or_ty, "forall A: Prop, forall B: Prop, Prop")
 
     // Left constructor for or: fun A, B, a, C, l, r => l a
-    let left = "fun A: * => fun B: * => fun a: A => fun C: * => fun l: A -> C => fun r: B -> C => l a"
-    let left_ty = "forall A: *, forall B: *, forall a: A, forall C: *, forall l: A -> C, forall r: B -> C, C"
+    let left = "fun A: Prop => fun B: Prop => fun a: A => fun C: Prop => fun l: A -> C => fun r: B -> C => l a"
+    let left_ty = "forall A: Prop, forall B: Prop, forall a: A, forall C: Prop, forall l: A -> C, forall r: B -> C, C"
     assert_type(left, left_ty)
 
     // Right constructor for or: fun A, B, b, C, l, r => r b
-    let right = "fun A: * => fun B: * => fun b: B => fun C: * => fun l: A -> C => fun r: B -> C => r b"
-    let right_ty = "forall A: *, forall B: *, forall b: B, forall C: *, forall l: A -> C, forall r: B -> C, C"
+    let right = "fun A: Prop => fun B: Prop => fun b: B => fun C: Prop => fun l: A -> C => fun r: B -> C => r b"
+    let right_ty = "forall A: Prop, forall B: Prop, forall b: B, forall C: Prop, forall l: A -> C, forall r: B -> C, C"
     assert_type(right, right_ty)
 
     // False is the type that takes any type and returns it
-    let false_ty = "forall X: *, X"
-    assert_type(false_ty, "*")
+    let false_ty = "forall X: Prop, X"
+    assert_type(false_ty, "Prop")
 
     // Negation (not) is A -> False
-    let not_ty = "fun A: * => A -> (\{false_ty})"
-    assert_type(not_ty, "forall A: *, *")
+    let not_ty = "fun A: Prop => A -> (\{false_ty})"
+    assert_type(not_ty, "forall A: Prop, Prop")
 
     // Law of Non-contradiction: not (A and (not A))
-    let ncontra = "fun A: * => fun p: (forall C: *, (A -> (A -> (\{false_ty})) -> C) -> C) => p (\{false_ty}) (fun a: A => fun na: A -> (\{false_ty}) => na a)"
-    let ncontra_ty = "forall A: *, (forall C: *, (A -> (A -> (\{false_ty})) -> C) -> C) -> (\{false_ty})"
+    let ncontra = "fun A: Prop => fun p: (forall C: Prop, (A -> (A -> (\{false_ty})) -> C) -> C) => p (\{false_ty}) (fun a: A => fun na: A -> (\{false_ty}) => na a)"
+    let ncontra_ty = "forall A: Prop, (forall C: Prop, (A -> (A -> (\{false_ty})) -> C) -> C) -> (\{false_ty})"
     assert_type(ncontra, ncontra_ty)
   }
 }

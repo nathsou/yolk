@@ -1,7 +1,6 @@
 
 pub enum Term {
-  Star
-  Box
+  Sort(UniverseLevel) // 0 = Prop, 1 = Type 0, 2 = Type 1, ...
   Bool
   Const(Const)
   // locally nameless representation: bound variables are represented by their de Bruijn index, free variables have a name
@@ -22,24 +21,32 @@ pub enum Const {
 pub type DeBruijnIndex = UInt
 pub type FreeVarId = UInt
 
-pub fn Term::is_sort(self: Term) -> Bool {
-  self is (Star | Box)
+pub type UniverseLevel = UInt
+
+pub fn Term::prop() -> Term {
+  Sort(0)
 }
 
-// equality should satisfy alpha-equivalence, so we ignore variable names and just compare the structure of the term
-pub impl Eq for Term with equal(self: Term, other: Term) -> Bool {
+pub fn Term::type_(n: UInt) -> Term {
+  Sort(n + 1)
+}
+
+pub fn Term::as_sort(self: Term) -> UniverseLevel? {
+  if self is Sort(u) { Some(u) } else { None }
+}
+
+pub fn Term::alpha_eq(self: Term, other: Term) -> Bool {
   match (self, other) {
-    (Box, Box) => true
-    (Star, Star) => true
+    (Sort(u1), Sort(u2)) => u1 == u2
     (Bool, Bool) => true
     (Const(c1), Const(c2)) => c1 == c2
     (BoundVar(i), BoundVar(j)) => i == j
     (FreeVar(_, id1), FreeVar(_, id2)) => id1 == id2
-    (App(f, x), App(g, y)) => x == y && f == g
-    (Lam(_, t1, body1), Lam(_, t2, body2)) => t1 == t2 && body1 == body2
-    (Pi(_, a1, b1), Pi(_, a2, b2)) => a1 == a2 && b1 == b2
-    (Let(_, t1, body1), Let(_, t2, body2)) => t1 == t2 && body1 == body2
-    (Ann(lhs1, ty1), (Ann(lhs2, ty2))) => ty1 == ty2 && lhs1 == lhs2
+    (App(f, x), App(g, y)) => x.alpha_eq(y) && f.alpha_eq(g)
+    (Lam(_, t1, body1), Lam(_, t2, body2)) => t1.alpha_eq(t2) && body1.alpha_eq(body2)
+    (Pi(_, a1, b1), Pi(_, a2, b2)) => a1.alpha_eq(a2) && b1.alpha_eq(b2)
+    (Let(_, t1, body1), Let(_, t2, body2)) => t1.alpha_eq(t2) && body1.alpha_eq(body2)
+    (Ann(lhs1, ty1), (Ann(lhs2, ty2))) => ty1.alpha_eq(ty2) && lhs1.alpha_eq(lhs2)
     _ => false
   }
 }
@@ -55,7 +62,7 @@ fn Term::has_loose_bvar(self: Term, depth: DeBruijnIndex) -> Bool {
     }
     Let(_, val, body) => val.has_loose_bvar(depth) || body.has_loose_bvar(depth + 1)
     Ann(lhs, rhs) => lhs.has_loose_bvar(depth) || rhs.has_loose_bvar(depth)
-    Star | Box | Bool | Const(_) | FreeVar(_) => false
+    Sort(_) | Bool | Const(_) | FreeVar(_) => false
   }
 }
 
@@ -72,8 +79,11 @@ fn Term::parens(self: Term, wrap~: Bool, bindings~: Array[String], depth~: Int, 
 fn Term::fmt(self: Term, bindings~: Array[String], depth~: Int, logger: &Logger) -> Unit {
   match self {
     Bool => logger.write_string("Bool")
-    Star => logger.write_char('*')
-    Box => logger.write_char('□')
+    Sort(u) => logger.write_string(match u {
+      0 => "Prop"
+      1 => "Type"
+      _ => "Type \{u - 1}"
+    })
     BoundVar(idx) => {
       let eff_idx = bindings.length() - 1 - idx.reinterpret_as_int()
       if eff_idx < 0 {
@@ -156,20 +166,22 @@ test "show term" {
   }
 
   assert_show_expr("Bool")
-  assert_show_expr("*")
-  assert_show_expr("□")
+  assert_show_expr("Prop")
+  assert_show_expr("Type")
+  assert_show_expr("Type 1")
+  assert_show_expr("Type 27")
   assert_show_expr("Bool -> Bool")
-  assert_show_expr("* -> Bool")
+  assert_show_expr("Type -> Bool")
   assert_show_expr("(x: Bool)")
-  assert_show_expr("(*: □)")
-  assert_show_expr("((Bool: *): □)")
+  assert_show_expr("(Type: Type 1)")
+  assert_show_expr("((Bool: Type 1): Type 2)")
   assert_show_expr("A -> B -> A")
   // `->` is right-associative
-  assert_eq(parse("A -> (B -> C)"), parse("A -> B -> C"))
+  assert_true(parse("A -> (B -> C)").alpha_eq(parse("A -> B -> C")))
   assert_show_expr("(A -> B) -> A")
-  assert_show_expr("forall A: *, A -> A")
-  assert_show_expr("forall A: *, Bool")
-  assert_show_expr("forall A: *, forall b: Bool, P A b")
+  assert_show_expr("forall A: Prop, A -> A")
+  assert_show_expr("forall A: Type 78, Bool")
+  assert_show_expr("forall A: Type, forall b: Bool, P A b")
   assert_show_expr("true")
   assert_show_expr("false")
   assert_show_expr("fun x: Bool => x")
@@ -177,11 +189,17 @@ test "show term" {
   assert_show_expr("fun x0: A => fun y0: B => fun z0: C => fun x1: D => fun y1: E => fun z2: F => y0")
   assert_show_expr("fun a: A => fun b: B => fun c: C => c")
   assert_show_expr("((fun x: A => x): A -> A)")
-  assert_show_expr("(((fun x: A => x): A -> A): *)")
+  assert_show_expr("(((fun x: A => x): A -> A): Prop)")
   assert_show_expr("f (g x)")
   assert_show_expr("x y z")
   assert_show_expr("let id = fun x: A => x in id")
+  assert_true(parse("Sort 0").alpha_eq(parse("Prop")))
+  assert_true(parse("Sort 1").alpha_eq(parse("Type")))
+  assert_true(parse("Sort 2").alpha_eq(parse("Type 1")))
+  assert_true(parse("Sort 3").alpha_eq(parse("Type 2")))
+  assert_true(parse("Type 0").alpha_eq(parse("Type")))
+  assert_true(parse("Type 1").alpha_eq(parse("Type 1")))
 
   // application is left-associative
-  assert_eq(parse("(x y) z"), parse("x y z"))
+  assert_true(parse("(x y) z").alpha_eq(parse("x y z")))
 }
