@@ -352,12 +352,12 @@ fn Parser::parse_atom(self: Parser) -> Term raise ParserError {
   }
 }
 
-pub fn parse(input: String) -> Term raise {
-  let tokens = Lexer::new(input).tokenise()
-  Parser::new(tokens).parse()
-}
-
 test "parser" {
+  fn parse(input: String) -> Term raise {
+    let tokens = Lexer::new(input).tokenise()
+    Parser::new(tokens).parse()
+  }
+
   fn expect_term(input: String, expected_term: Term) raise {
     assert_eq(parse(input), expected_term)
   }

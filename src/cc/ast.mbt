@@ -4,9 +4,9 @@ pub enum Term {
   Box
   Bool
   Const(Const)
+  // locally nameless representation: bound variables are represented by their de Bruijn index, free variables have a name
   BoundVar(DeBruijnIndex)
   FreeVar(String, FreeVarId)
-  LocalVar(String, FreeVarId)
   App(Term, Term)
   Lam(String, Term, Term)
   Pi(String?, Term, Term)
@@ -33,7 +33,6 @@ pub impl Eq for Term with equal(self: Term, other: Term) -> Bool {
     (Const(c1), Const(c2)) => c1 == c2
     (BoundVar(i), BoundVar(j)) => i == j
     (FreeVar(_, x), FreeVar(_, y)) => x == y
-    (LocalVar(_, x), LocalVar(_, y)) => x == y
     (App(f, x), App(g, y)) => x == y && f == g
     (Lam(_, t1, body1), Lam(_, t2, body2)) => t1 == t2 && body1 == body2
     (Pi(_, a1, b1), Pi(_, a2, b2)) => a1 == a2 && b1 == b2
@@ -72,7 +71,6 @@ fn Term::fmt(self: Term, bindings~: Array[String], depth~: Int, logger: &Logger)
       }
     }
     FreeVar(name, _) => logger.write_string(name)
-    LocalVar(name, _) => logger.write_string(name)
     Const(c) => c.output(logger)
     App(lhs, rhs) => {
       let lhs_needs_parens = lhs is Lam(_)
@@ -132,6 +130,10 @@ pub impl Show for Term with output(self: Term, logger: &Logger) {
 }
 
 test "show term" {
+  fn parse(input: String) -> Term raise {
+    Parser::new(Lexer::new(input).tokenise()).parse()
+  }
+
   fn assert_show_expr(expr: String) raise {
     assert_eq("\{parse(expr)}", expr)
   }

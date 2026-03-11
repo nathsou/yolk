@@ -1,9 +1,9 @@
 
 fn eval(term: String) -> Term raise {
   let ctx = Context::new()
-  let term_ast = parse(term)
-  let _ = ctx.infer(parse(term))
-  normalise(term_ast)
+  let term_ast = ctx.parse(term)
+  let _ = ctx.infer(term_ast)
+  ctx.normalise(term_ast)
 }
 
 fn main {
