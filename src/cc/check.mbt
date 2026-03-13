@@ -13,8 +13,15 @@ pub fn Context::from(elab: Elaborator) -> Context raise {
   }
 
   // check that all the top-level declarations are well-typed
-  for decl in ctx.env.decls.values() {
+  for name, decl in ctx.env.decls.iter2() {
     match decl {
+      Axiom(ty) => {
+        let s = ctx.infer(ty)
+
+        if !(s is Sort(_)) {
+          raise TypeError(ty, "Invalid type for axiom '\{name}'")
+        }
+      }
       Definition(ty, body) => {
         ctx.check(body, ty)
       }
@@ -43,9 +50,10 @@ fn Context::lookup_free_var(self: Context, var_id: FreeVarId) -> Term? {
 fn Context::normalise(self: Context, term: Term) -> Term {
   match term {
     Ref(name) => {
-      // delta reduction: unfold definitions
       if self.env.decls.get(name) is Some(decl) {
         match decl {
+          Axiom(_) => term
+          // delta reduction: unfold definitions
           Definition(_, body) => self.normalise(body)
         }
       } else {
@@ -101,6 +109,7 @@ fn Context::normalise(self: Context, term: Term) -> Term {
     Sort(_) | Bool | Const(_) | BoundVar(_) | FreeVar(_) => term
   }
 }
+
 // Weak Head Normal Form: only reduce the head of the term, and do not recurse under binders
 pub fn Context::whnf(self: Context, term: Term) -> Term {
   match term {
@@ -117,9 +126,10 @@ pub fn Context::whnf(self: Context, term: Term) -> Term {
       self.whnf(instantiate(body, 0, val))
     }
     Ref(name) => {
-      // delta reduction
       if self.env.decls.get(name) is Some(decl) {
         match decl {
+          Axiom(_) => term
+          // delta reduction
           Definition(_, body) => self.whnf(body)
         }
       } else {
@@ -179,6 +189,7 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
     Ref(name) => {
       if self.env.decls.get(name) is Some(decl) {
         match decl {
+          Axiom(ty) => ty
           // we already checked that the environment is well-formed
           Definition(ty, _) => ty
         }
@@ -391,7 +402,7 @@ test "type checking" {
 
   // church encodings
   {
-    let bool_ty = "forall A: Type, forall t: A, forall f: A, A"
+    let bool_ty = "forall A: Type, A -> A -> A"
     assert_type(bool_ty, "Type 1")
     assert_type("fun A: Type => fun t: A => fun f: A => t", bool_ty)
     assert_type("fun A: Type => fun t: A => fun f: A => f", bool_ty)
@@ -399,7 +410,7 @@ test "type checking" {
 
   // church naturals
   {
-    let nat_ty = "forall A: Type, forall succ: A -> A, forall zero: A, A"
+    let nat_ty = "forall A: Type, (A -> A) -> A -> A"
     let c_zero = "fun A: Type => fun succ: A -> A => fun z: A => z"
     assert_type(nat_ty, "Type 1")
     assert_type(c_zero, nat_ty)
@@ -408,7 +419,7 @@ test "type checking" {
   {
     // K-Combinator
     let k_comb = "fun A: Type => fun B: Type => fun x: A => fun y: B => x"
-    let k_type = "forall A: Type, forall B: Type, forall x: A, forall y: B, A"
+    let k_type = "forall A: Type, forall B: Type, A -> B -> A"
     assert_type(k_comb, k_type)
   }
 
@@ -449,7 +460,7 @@ test "type checking" {
 
   // function abstraction validation
   assert_type_err("fun x: true => x")
-  assert_type("fun A: Type => fun P: A -> Type => fun a: A => P a", "forall A: Type, forall P: A -> Type, forall a: A, Type")
+  assert_type("fun A: Type => fun P: A -> Type => fun a: A => P a", "forall A: Type, (A -> Type) -> A -> Type")
 
   // universe applications
   assert_type("(fun A: Type => fun x: A => x) Bool", "Bool -> Bool")
@@ -463,7 +474,7 @@ test "type checking" {
 
     // Pair constructor for and: fun A, B, a, b, C, f => f a b
     let pair = "fun A: Prop => fun B: Prop => fun a: A => fun b: B => fun C: Type => fun f: A -> B -> C => f a b"
-    let pair_ty = "forall A: Prop, forall B: Prop, forall a: A, forall b: B, forall C: Type, forall f: A -> B -> C, C"
+    let pair_ty = "forall A: Prop, forall B: Prop, A -> B -> (forall C: Type, (A -> B -> C) -> C)"
     assert_type(pair, pair_ty)
 
     // Disjunction (or)
@@ -472,12 +483,12 @@ test "type checking" {
 
     // Left constructor for or: fun A, B, a, C, l, r => l a
     let left = "fun A: Prop => fun B: Prop => fun a: A => fun C: Prop => fun l: A -> C => fun r: B -> C => l a"
-    let left_ty = "forall A: Prop, forall B: Prop, forall a: A, forall C: Prop, forall l: A -> C, forall r: B -> C, C"
+    let left_ty = "forall A: Prop, forall B: Prop, A -> (forall C: Prop, (A -> C) -> ((B -> C) -> C))"
     assert_type(left, left_ty)
 
     // Right constructor for or: fun A, B, b, C, l, r => r b
     let right = "fun A: Prop => fun B: Prop => fun b: B => fun C: Prop => fun l: A -> C => fun r: B -> C => r b"
-    let right_ty = "forall A: Prop, forall B: Prop, forall b: B, forall C: Prop, forall l: A -> C, forall r: B -> C, C"
+    let right_ty = "forall A: Prop, forall B: Prop, B -> (forall C: Prop, (A -> C) -> ((B -> C) -> C))"
     assert_type(right, right_ty)
 
     // False is the type that takes any type and returns it

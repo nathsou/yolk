@@ -59,6 +59,10 @@ pub fn Elaborator::run_command(self: Elaborator, name: String, args: Array[STerm
 
 pub fn Elaborator::elaborate_decl(self: Elaborator, name: Name, decl: Decl[STerm]) -> Unit raise ElaborationError {
   match decl {
+    Axiom(ty) => {
+      let ty_elab = self.elaborate_term(ty)
+      self.env.add(name, Axiom(ty_elab))
+    }
     Definition(ty, body) => {
       let ty_elab = self.elaborate_term(ty)
       let body_elab = self.elaborate_term(body)

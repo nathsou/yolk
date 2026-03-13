@@ -123,7 +123,7 @@ fn Term::fmt(self: Term, bindings~: Array[String], depth~: Int, logger: &Logger)
     Pi(None, a, b) => {
       a.parens(wrap=a is Pi(_), bindings~, depth~, logger)
       logger.write_string(" -> ")
-      b.fmt(bindings~, depth = depth + 1, logger)
+      b.parens(wrap=b is Pi(_), bindings~, depth = depth + 1, logger)
     }
     Let(x, val, body) => {
       logger.write_string("let ")

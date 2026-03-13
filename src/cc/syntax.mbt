@@ -12,6 +12,7 @@ pub enum STerm {
 } derive(Eq)
 
 pub enum Decl[T] {
+  Axiom(T) // type
   Definition(T, T) // type, body
 } derive(Eq)
 
@@ -122,13 +123,19 @@ pub impl Show for STerm with output(self: STerm, logger: &Logger) {
 
 pub impl[T: Show] Show for TopLevel[T] with output(self: TopLevel[T], logger: &Logger) {
   match self {
+    Declaration(name, Axiom(ty)) => {
+      logger.write_string("axiom ")
+      logger.write_object(name)
+      logger.write_string(" : ")
+      logger.write_object(ty)
+    }
     Declaration(name, Definition(ty, val)) => {
       logger.write_string("def ")
-      name.output(logger)
+      logger.write_object(name)
       logger.write_string(" : ")
-      ty.output(logger)
+      logger.write_object(ty)
       logger.write_string(" := ")
-      val.output(logger)
+      logger.write_object(val)
     }
     Command(cmd, args) => {
       logger.write_char('#')
@@ -136,7 +143,7 @@ pub impl[T: Show] Show for TopLevel[T] with output(self: TopLevel[T], logger: &L
       
       for arg in args {
         logger.write_char(' ')
-        arg.output(logger)
+        logger.write_object(arg)
       }
     }
   }

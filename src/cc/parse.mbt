@@ -1,7 +1,7 @@
 
 pub enum Token {
-  Lparen; Rparen; ThickArrow; Arrow; Colon; Comma; Dot
-  Sort; Prop; Type; Fun; Forall; Let; In; ColonEqual; Def; Hash 
+  Lparen; Rparen; ThickArrow; Arrow; Colon; Comma; Dot; Hash
+  Sort; Prop; Type; Fun; Forall; Let; In; ColonEqual; Def; Axiom
   True; False; Nat(UInt); Var(String); Bool
 } derive(Show, Eq)
 
@@ -138,6 +138,7 @@ fn Lexer::next(self: Lexer) -> LexerResult {
         let identifier = self.parse_identifier()
 
         match identifier {
+          "axiom" => Yay(Axiom)
           "fun" => Yay(Fun)
           "forall" => Yay(Forall)
           "let" => Yay(Let)
@@ -256,6 +257,7 @@ pub fn Parser::parse(self: Parser) -> Program[STerm] raise ParserError {
 
 fn Parser::parse_top_level(self: Parser) -> TopLevel[STerm] raise ParserError {
   match self.peek() {
+    Axiom => self.parser_axiom()
     Def => self.parse_definition()
     Hash => self.parse_command()
     _ => raise UnexpectedToken(self.peek())
@@ -281,6 +283,14 @@ fn Parser::parse_name(self: Parser) -> Name raise ParserError {
   } else {
     raise Message("Expected name")
   }
+}
+
+fn Parser::parser_axiom(self: Parser) -> TopLevel[STerm] raise ParserError {
+  self.expect(Axiom)
+  let name = self.parse_name()
+  self.expect(Colon)
+  let ty = self.parse_term()
+  Declaration(name, Axiom(ty))
 }
 
 fn Parser::parse_definition(self: Parser) -> TopLevel[STerm] raise ParserError {
