@@ -1,11 +1,34 @@
 
-fn eval(term: String) -> Term raise {
-  let ctx = Context::new()
-  let term_ast = ctx.parse(term)
-  let _ = ctx.infer(term_ast)
-  ctx.normalise(term_ast)
+fn run(path: String) -> Unit raise {
+  let contents = @fs.read_file_to_string(path)
+  let tokens = Lexer::new(contents).tokenise()
+  let parser = Parser::new(tokens)
+  let top_level = parser.parse()
+  println(top_level)
 }
 
 fn main {
-  println(try? eval("let f = let A = Type in fun f: A -> A -> Bool => fun x: A => f x x in let A = Bool -> Bool -> Bool in f (fun x: Type => fun y: Type => true) (A -> A)"))
+  let cmd = @argparse.Command(
+    "yolk",
+    options=[],
+    positionals=[
+      @argparse.PositionArg("source", about="Path to the .yolk file to check"),
+    ],
+  )
+
+  try cmd.parse() catch {
+    err => {
+      println("Error parsing arguments: \{err}")
+    }
+  } else {
+    matches => {
+      if matches.values.get("source") is Some(path) {
+        try run(path[0]) catch {
+          err => {
+            println("Error: \{err}")
+          }
+        }
+      }
+    }
+  }
 }

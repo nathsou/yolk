@@ -1,6 +1,6 @@
 
 struct Context {
-  mut next_free_var_id: UInt 
+  mut next_free_var_id: UInt
   free_vars: Map[FreeVarId, Term]
 }
 
@@ -9,11 +9,13 @@ pub fn Context::new() -> Context {
 }
 
 /// Parses a term from a string, updating the context's next_free_var_id to account for any free variables introduced by the term
-pub fn Context::parse(self: Context, input: String) -> Term raise {
+pub fn Context::parse_term(self: Context, input: String) -> Term raise {
   let tokens = Lexer::new(input).tokenise()
   let parser = Parser::new(tokens)
-  let term = parser.parse_term()
-  self.next_free_var_id += parser.free_vars.length().reinterpret_as_uint()
+  let s_term = parser.parse_term()
+  let elab = Elaborator::new()
+  let term = elab.elaborate(s_term)
+  self.next_free_var_id += elab.free_vars.length().reinterpret_as_uint()
   term
 }
 
@@ -48,16 +50,16 @@ fn Context::normalise(self: Context, term: Term) -> Term {
       // 1. Generate a fresh FreeVar
       let fresh_x = self.declare_fresh(ty)
       defer self.free_vars.remove(fresh_x)
-      
+
       // 2. Open the binder, replacing BoundVar(0) with the FreeVar
       let opened = open(body, 0, x, fresh_x)
-      
+
       // 3. Normalise the locally closed body
       let norm_body = self.normalise(opened)
 
       // 4. Close the FreeVar back into BoundVar(0)
       let closed = close(norm_body, fresh_x, 0)
-      
+
       // 5. eta-conversion: (fun x => f x) <=> f, when x is not free in f
       if closed is App(f, BoundVar(0)) && !f.has_loose_bvar(0) {
         return f
@@ -70,7 +72,7 @@ fn Context::normalise(self: Context, term: Term) -> Term {
       let b_norm = if x is Some(name) {
         let fresh_x = self.declare_fresh(a)
         defer self.free_vars.remove(fresh_x)
-        
+
         let opened = open(b, 0, name, fresh_x)
         close(self.normalise(opened), fresh_x, 0)
       } else {
@@ -92,7 +94,7 @@ pub fn Context::whnf(self: Context, term: Term) -> Term {
       let f_whnf = self.whnf(f)
       match f_whnf {
         Lam(_, _, body) => self.whnf(instantiate(body, 0, arg))
-        _ => App(f_whnf, arg) 
+        _ => App(f_whnf, arg)
       }
     }
     Let(_, val, body) => {
@@ -229,7 +231,6 @@ pub fn Context::check(self: Context, term: Term, ty: Term) -> Unit raise TypeChe
       let inferred_ty_norm = self.normalise(self.infer(term))
       let ty_norm = self.normalise(ty)
       if !self.is_definitionally_equal(inferred_ty_norm, ty_norm) {
-        
         raise TypeError(term, "Expected type '\{ty_norm}', got '\{inferred_ty_norm}'")
       }
     }
@@ -261,8 +262,9 @@ pub fn Context::is_definitionally_equal(self: Context, term: Term, expected: Ter
 test "normalisation" {
   fn assert_nf(term: String, nf: String) -> Unit raise {
     let ctx = Context::new()
-    if !ctx.normalise(ctx.parse(term)).alpha_eq(ctx.parse(nf)) {
-      fail("Expected normal form of '\{term}' to be '\{nf}', got '\{ctx.normalise(ctx.parse(term))}'")
+    let term_ast = ctx.parse_term(term)
+    if !ctx.normalise(term_ast).alpha_eq(ctx.parse_term(nf)) {
+      fail("Expected normal form of '\{term}' to be '\{nf}', got '\{ctx.normalise(term_ast)}'")
     }
   }
 
@@ -278,16 +280,16 @@ test "normalisation" {
   assert_nf("fun f: Bool -> Bool -> Bool => fun x: Bool => f x x", "fun f: Bool -> Bool -> Bool => fun x: Bool => f x x")
   assert_nf("fun f: Bool -> Bool => fun x: Bool => f (f x)", "fun f: Bool -> Bool => fun x: Bool => f (f x)")
   assert_nf("fun x: Bool -> Bool => x x", "fun x: Bool -> Bool => x x")
-  
+
   // let expressions
-  assert_nf("let x = true in x", "true")
-  assert_nf("let f = fun x: Bool => x in f true", "true")
-  assert_nf("let id = fun A: Type => fun x: A => x in id Bool true", "true")
-  assert_nf("let const = fun A: Type => fun B: Type => fun x: A => fun y: B => x in const Bool Bool true false", "true")
+  assert_nf("let x := true in x", "true")
+  assert_nf("let f := fun x: Bool => x in f true", "true")
+  assert_nf("let id := fun A: Type => fun x: A => x in id Bool true", "true")
+  assert_nf("let const := fun A: Type => fun B: Type => fun x: A => fun y: B => x in const Bool Bool true false", "true")
 
   // beta reduction
   assert_nf("(fun p: Bool -> Bool => p true) (fun x: Bool => x)", "true")
-  
+
   // complex applications
   assert_nf("(fun A: Type => fun x: A => x) Bool true", "true")
   assert_nf("(fun f: Bool -> Bool => fun x: Bool => f (f x)) (fun x: Bool => x) true", "true")
@@ -296,16 +298,16 @@ test "normalisation" {
 test "type checking" {
   fn assert_type(term: String, ty: String) -> Unit raise {
     let ctx = Context::new()
-    ctx.check(ctx.parse(term), ctx.parse(ty))
+    ctx.check(ctx.parse_term(term), ctx.parse_term(ty))
   }
 
   fn assert_type_err(term: String) -> Unit raise {
     let ctx = Context::new()
-    
-    try ({ let _ = ctx.infer(ctx.parse(term)) }) catch {
+
+    try ({ let _ = ctx.infer(ctx.parse_term(term)) }) catch {
       _ => ()
     } noraise {
-      _ => fail("Expected type error for '\{term}', but typing succeeded") 
+      _ => fail("Expected type error for '\{term}', but typing succeeded")
     }
   }
 
@@ -331,8 +333,8 @@ test "type checking" {
   assert_type("(fun x: Bool => x) true", "Bool")
   assert_type("(fun A: Type => A -> Bool) Bool", "Type")
   assert_type("fun A: Type => fun B: Type => A -> B", "forall A: Type, forall B: Type, Type")
-  assert_type("let x = true in fun y: Type => x", "forall A: Type, Bool")
-  assert_type("let T = Bool -> Bool in fun f: T => fun x: Bool => f x", "(Bool -> Bool) -> Bool -> Bool")
+  assert_type("let x := true in fun y: Type => x", "forall A: Type, Bool")
+  assert_type("let T := Bool -> Bool in fun f: T => fun x: Bool => f x", "(Bool -> Bool) -> Bool -> Bool")
   assert_type("fun A: Type 1 => A -> Bool", "forall A: Type 1, Type 1")
   assert_type("fun x: Type 1 => x", "forall x: Type 1, Type 1")
 
@@ -351,7 +353,7 @@ test "type checking" {
     assert_type("fun A: Type => fun t: A => fun f: A => f", bool_ty)
   }
 
-  // church naturals 
+  // church naturals
   {
     let nat_ty = "forall A: Type, forall succ: A -> A, forall zero: A, A"
     let c_zero = "fun A: Type => fun succ: A -> A => fun z: A => z"
@@ -388,14 +390,14 @@ test "type checking" {
 
   // un-typable self-application
   assert_type_err("fun x: Type => x x")
-  
+
   // applying incorrect type to dependent function
-  assert_type_err("(fun x: Bool => x) Prop")  
+  assert_type_err("(fun x: Bool => x) Prop")
 
   // let bindings
-  assert_type("let id = fun x: Bool => x in id", "Bool -> Bool")
-  assert_type("let T = Bool in (true: T)", "Bool")
-  assert_type("let T = Type in let U = T in (Bool: U)", "Type")
+  assert_type("let id := fun x: Bool => x in id", "Bool -> Bool")
+  assert_type("let T := Bool in (true: T)", "Bool")
+  assert_type("let T := Type in let U := T in (Bool: U)", "Type")
 
   // dependent pair and logical operations
   assert_type("forall A: Type, forall B: A -> Type, Type", "Type 1")
@@ -414,7 +416,7 @@ test "type checking" {
     // Conjunction (and)
     let and_ty = "fun A: Prop => fun B: Prop => forall C: Prop, (A -> B -> C) -> C"
     assert_type(and_ty, "forall A: Prop, forall B: Prop, Prop")
-    
+
     // Pair constructor for and: fun A, B, a, b, C, f => f a b
     let pair = "fun A: Prop => fun B: Prop => fun a: A => fun b: B => fun C: Type => fun f: A -> B -> C => f a b"
     let pair_ty = "forall A: Prop, forall B: Prop, forall a: A, forall b: B, forall C: Type, forall f: A -> B -> C, C"

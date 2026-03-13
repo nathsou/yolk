@@ -1,7 +1,8 @@
 
 pub enum Token {
-  Lparen; Rparen; ThickArrow; Arrow; Sort; Prop; Type; Fun; Forall; Let; In; Equal
-  Colon; Comma; Dot; True; False; Nat(UInt); Var(String); Bool
+  Lparen; Rparen; ThickArrow; Arrow; Colon; Comma; Dot
+  Sort; Prop; Type; Fun; Forall; Let; In; ColonEqual; Def; Hash 
+  True; False; Nat(UInt); Var(String); Bool
 } derive(Show, Eq)
 
 pub suberror LexerError {
@@ -105,7 +106,14 @@ fn Lexer::next(self: Lexer) -> LexerResult {
   match char {
     '(' => { self.advance(); Yay(Lparen) }
     ')' => { self.advance(); Yay(Rparen) }
-    ':' => { self.advance(); Yay(Colon) }
+    ':' => {
+      self.advance()
+      if self.consumes('=') {
+        Yay(ColonEqual)
+      } else {
+        Yay(Colon)
+      }
+    }
     ',' => { self.advance(); Yay(Comma) }
     '.' => { self.advance(); Yay(Dot) }
     '=' => {
@@ -113,7 +121,7 @@ fn Lexer::next(self: Lexer) -> LexerResult {
       if self.consumes('>') {
         Yay(ThickArrow)
       } else {
-        Yay(Equal)
+        Grr(UnexpectedChar(char~, index=self.index))
       }
     }
     '-' => {
@@ -124,6 +132,7 @@ fn Lexer::next(self: Lexer) -> LexerResult {
         Grr(UnexpectedChar(char~, index=self.index))
       }
     }
+    '#' => { self.advance(); Yay(Hash) }
     _ => {
       if is_alpha(char) {
         let identifier = self.parse_identifier()
@@ -133,6 +142,7 @@ fn Lexer::next(self: Lexer) -> LexerResult {
           "forall" => Yay(Forall)
           "let" => Yay(Let)
           "in" => Yay(In)
+          "def" => Yay(Def)
           "true" => Yay(True)
           "false" => Yay(False)
           "Bool" => Yay(Bool)
@@ -177,8 +187,6 @@ pub fn Lexer::tokenise(self: Lexer) -> Array[Token] raise LexerError {
 
 pub struct Parser {
   tokens: Array[Token]
-  bound_vars: Array[String]
-  free_vars: Map[String, FreeVarId]
   mut index: Int
 }
 
@@ -190,7 +198,7 @@ pub suberror ParserError {
 } derive(Show, Eq)
 
 pub fn Parser::new(tokens: Array[Token]) -> Parser {
-  { tokens, bound_vars: [], free_vars: {}, index: 0 }
+  { tokens, index: 0 }
 }
 
 fn Parser::has_next(self: Parser) -> Bool {
@@ -203,6 +211,10 @@ fn Parser::peek(self: Parser) -> Token raise ParserError {
   } else {
     raise UnexpectedEOF 
   }
+}
+
+fn Parser::peek_safe(self: Parser) -> Token? {
+  self.tokens.get(self.index)
 }
 
 fn Parser::advance(self: Parser) -> Unit {
@@ -232,17 +244,68 @@ fn Parser::expect_var(self: Parser) -> String raise ParserError {
   }
 }
 
-pub fn Parser::parse(self: Parser) -> Term raise ParserError {
-  let expr = self.parse_term()
+pub fn Parser::parse(self: Parser) -> Array[TopLevel] raise ParserError {
+  let top_level: Array[TopLevel] = []
 
-  if self.index != self.tokens.length() {
-    raise UnexpectedToken(self.tokens[self.index])
+  while self.index < self.tokens.length() {
+    top_level.push(self.parse_top_level())
   }
 
-  expr
+  top_level
 }
 
-fn Parser::parse_term(self: Parser) -> Term raise ParserError {
+fn Parser::parse_top_level(self: Parser) -> TopLevel raise ParserError {
+  match self.peek() {
+    Def => self.parse_definition()
+    Hash => self.parse_command()
+    _ => raise UnexpectedToken(self.peek())
+  }
+}
+
+fn Parser::parse_name(self: Parser) -> Name raise ParserError {
+  let parts = []
+
+  while self.peek_safe() is Some(Var(part)) {
+    self.advance()
+    parts.push(part)
+
+    if self.peek_safe() is Some(Dot) {
+      self.advance()
+    } else {
+      break
+    }
+  }
+
+  if Name::from(parts) is Some(name) {
+    name
+  } else {
+    raise Message("Expected name")
+  }
+}
+
+fn Parser::parse_definition(self: Parser) -> TopLevel raise ParserError {
+  self.expect(Def)
+  let name = self.parse_name()
+  self.expect(Colon)
+  let ty = self.parse_term()
+  self.expect(ColonEqual)
+  let body = self.parse_term()
+  Definition(name, ty, body)
+}
+
+fn Parser::parse_command(self: Parser) -> TopLevel raise ParserError {
+  self.expect(Hash)
+  let name = self.expect_var()
+  let args: Array[STerm] = []
+
+  while (try? self.parse_term()) is Ok(term) {
+    args.push(term)
+  }
+
+  Command(name, args)
+}
+
+fn Parser::parse_term(self: Parser) -> STerm raise ParserError {
   match self.peek() {
     Fun => self.parse_fun()
     Forall => self.parse_forall()
@@ -251,43 +314,37 @@ fn Parser::parse_term(self: Parser) -> Term raise ParserError {
   }
 }
 
-fn Parser::parse_fun(self: Parser) -> Term raise ParserError {
+fn Parser::parse_fun(self: Parser) -> STerm raise ParserError {
   self.expect(Fun)
   let v = self.expect_var()
   self.expect(Colon)
   let ty = self.parse_term()
   self.expect(ThickArrow)
-  self.bound_vars.push(v)
-  defer { let _ = self.bound_vars.unsafe_pop() }
   let body = self.parse_term()
-  Lam(v, ty, body) 
+  Fun(v, ty, body) 
 }
 
-fn Parser::parse_forall(self: Parser) -> Term raise ParserError {
+fn Parser::parse_forall(self: Parser) -> STerm raise ParserError {
   self.expect(Forall)
   let v = self.expect_var()
   self.expect(Colon)
   let ty = self.parse_term()
   self.expect(Comma)
-  self.bound_vars.push(v)
-  defer { let _ = self.bound_vars.unsafe_pop() }
   let rhs = self.parse_term()
   Pi(Some(v), ty, rhs)
 }
 
-fn Parser::parse_let(self: Parser) -> Term raise ParserError {
+fn Parser::parse_let(self: Parser) -> STerm raise ParserError {
   self.expect(Let)
   let v = self.expect_var()
-  self.expect(Equal)
+  self.expect(ColonEqual)
   let val = self.parse_term()
   self.expect(In)
-  self.bound_vars.push(v)
-  defer { let _ = self.bound_vars.unsafe_pop() }
   let body = self.parse_term()
   Let(v, val, body)
 }
 
-fn Parser::parse_app(self: Parser) -> Term raise ParserError {
+fn Parser::parse_app(self: Parser) -> STerm raise ParserError {
   let mut lhs = self.parse_arrow()
 
   while (try? self.parse_arrow()) is Ok(rhs) {
@@ -297,7 +354,7 @@ fn Parser::parse_app(self: Parser) -> Term raise ParserError {
   lhs
 }
 
-fn Parser::parse_arrow(self: Parser) -> Term raise ParserError {
+fn Parser::parse_arrow(self: Parser) -> STerm raise ParserError {
   let lhs = self.parse_atom()
 
   if self.matches(Arrow) {
@@ -310,26 +367,11 @@ fn Parser::parse_arrow(self: Parser) -> Term raise ParserError {
   }
 }
 
-fn Parser::parse_atom(self: Parser) -> Term raise ParserError {
+fn Parser::parse_atom(self: Parser) -> STerm raise ParserError {
   match self.peek() {
-    Var(v) => {
+    Var(x) => {
       self.advance();
-
-      for i = self.bound_vars.length() - 1; i >= 0; i = i - 1 {
-        if self.bound_vars[i] == v {
-          return BoundVar((self.bound_vars.length() - 1 - i).reinterpret_as_uint())
-        }
-      }
-
-      let var_id: FreeVarId = if self.free_vars.get(v) is Some(var_id) {
-        var_id
-      } else {
-        let var_id = self.free_vars.length().reinterpret_as_uint()
-        self.free_vars[v] = var_id
-        var_id
-      }
-
-      FreeVar(v, var_id)
+      Var(x)
     }
     Bool => { self.advance(); Bool }
     Prop => { self.advance(); Sort(0) }
@@ -338,15 +380,15 @@ fn Parser::parse_atom(self: Parser) -> Term raise ParserError {
       if self.has_next() && self.peek() is Nat(u) {
         self.advance()
         match tok {
-          Sort => Term::Sort(u)
-          _ => Term::Sort(u + 1)
+          Sort => Sort(u)
+          _ => Sort(u + 1)
         }
       } else {
         match tok {
           Sort => {
             raise Message("Expected universe level after 'Sort'")
           }
-          _ => Term::Sort(1) // Type 0
+          _ => Sort(1) // Type 0
         }
       }
     }
@@ -373,21 +415,34 @@ fn Parser::parse_atom(self: Parser) -> Term raise ParserError {
 }
 
 test "parser" {
-  fn parse(input: String) -> Term raise {
+  fn parse_term(input: String) -> STerm raise {
     let tokens = Lexer::new(input).tokenise()
-    Parser::new(tokens).parse()
+    Parser::new(tokens).parse_term()
   }
 
-  fn expect_term(input: String, expected_term: Term) raise {
-    if !parse(input).alpha_eq(expected_term) {
-      fail("Expected term '\{expected_term}', got '\{parse(input)}'")
+  fn parse_top_level(input: String) -> TopLevel raise {
+    let tokens = Lexer::new(input).tokenise()
+    Parser::new(tokens).parse_top_level()
+  }
+
+  fn expect_term(input: String, expected_term: STerm) raise {
+    let parsed = parse_term(input)
+    if parsed != expected_term {
+      fail("Expected term '\{expected_term}', got '\{parsed}'")
+    }
+  }
+
+  fn expect_top_level(input: String, expected_top_level: TopLevel) raise {
+    let parsed = parse_top_level(input)
+    if parsed != expected_top_level {
+      fail("Expected top-level '\{expected_top_level}', got '\{parsed}'")
     }
   }
 
   fn expect_term_err(input: String, expected_err: ParserError) raise {
     let tokens = Lexer::new(input).tokenise()
 
-    try Parser::new(tokens).parse() catch {
+    try Parser::new(tokens).parse_term() catch {
       err => assert_eq(err, expected_err)
     } noraise {
       expr => fail("Expected error '\{expected_err}', got '\{expr}'")
@@ -403,26 +458,32 @@ test "parser" {
   expect_term("Bool", Bool)
   expect_term("Bool -> Bool", Pi(None, Bool, Bool))
   expect_term("Bool -> Bool -> Bool", Pi(None, Bool, Pi(None, Bool, Bool)))
-  expect_term("A", FreeVar("A", 0))
-  expect_term("P", FreeVar("P", 0))
-  expect_term("Q71", FreeVar("Q71", 0))
-  expect_term("P -> Q -> (P -> Bool -> R)",  Pi(None, FreeVar("P", 0), Pi(None, FreeVar("Q", 1), Pi(None, FreeVar("P", 0), Pi(None, Bool, FreeVar("R", 2))))))
+  expect_term("A", Var("A"))
+  expect_term("P", Var("P"))
+  expect_term("Q71", Var("Q71"))
+  expect_term("P -> Q -> (P -> Bool -> R)",  Pi(None, Var("P"), Pi(None, Var("Q"), Pi(None, Var("P"), Pi(None, Bool, Var("R"))))))
   expect_term("true", Const(Bool(true)))
   expect_term("false", Const(Bool(false)))
-  expect_term("x", FreeVar("x", 0))
+  expect_term("x", Var("x"))
   expect_term("(true: Bool)", Ann(Const(Bool(true)), Bool))
-  expect_term("fun x: Bool => x", Lam("x", Bool, BoundVar(0)))
-  expect_term("fun x: Bool => y", Lam("x", Bool, FreeVar("y", 0)))
-  expect_term("fun x: A => x", Lam("x", FreeVar("A", 0), BoundVar(0)))
-  expect_term("fun x: A => (x: A)", Lam("x", FreeVar("A", 0), Ann(BoundVar(0), FreeVar("A", 0))))
-  expect_term("fun x: A => fun y: B => x", Lam("x", FreeVar("A", 0), Lam("y", FreeVar("B", 1), BoundVar(1))))
-  expect_term("f x", App(FreeVar("f", 0), FreeVar("x", 1)))
-  expect_term("(fun x: Bool => x) true", App(Lam("x", Bool, BoundVar(0)), Const(Bool(true))))
-  expect_term("(fun f: (Bool -> Bool) => f true) (fun x: Bool => x)", App(Lam("x", Pi(None, Bool, Bool), App(BoundVar(0), Const(Bool(true)))), Lam("x", Bool, BoundVar(0))))
-  expect_term("forall A: Type, A", Pi(Some("A"), Sort(1), BoundVar(0)))
-  expect_term("forall b: Bool, b", Pi(Some("b"), Bool, BoundVar(0)))
-  expect_term("fun T: Type 2 => forall x: T, T", Lam("T", Sort(3), Pi(Some("x"), BoundVar(0), BoundVar(1))))
-  expect_term("let id = fun x: A => x in id", Let("id", Lam("x", FreeVar("A", 0), BoundVar(0)), BoundVar(0)))
+  expect_term("fun x: Bool => x", Fun("x", Bool, Var("x")))
+  expect_term("fun x: Bool => y", Fun("x", Bool, Var("y")))
+  expect_term("fun x: A => x", Fun("x", Var("A"), Var("x")))
+  expect_term("fun x: A => (x: A)", Fun("x", Var("A"), Ann(Var("x"), Var("A"))))
+  expect_term("fun x: A => fun y: B => x", Fun("x", Var("A"), Fun("y", Var("B"), Var("x"))))
+  expect_term("f x", App(Var("f"), Var("x")))
+  expect_term("(fun x: Bool => x) true", App(Fun("x", Bool, Var("x")), Const(Bool(true))))
+  expect_term("(fun f: (Bool -> Bool) => f true) (fun x: Bool => x)", App(Fun("f", Pi(None, Bool, Bool), App(Var("f"), Const(Bool(true)))), Fun("x", Bool, Var("x"))))
+  expect_term("forall A: Type, A", Pi(Some("A"), Sort(1), Var("A")))
+  expect_term("forall b: Bool, b", Pi(Some("b"), Bool, Var("b")))
+  expect_term("fun T: Type 2 => forall x: T, T", Fun("T", Sort(3), Pi(Some("x"), Var("T"), Var("T"))))
+  expect_term("let id := fun x: A => x in id", Let("id", Fun("x", Var("A"), Var("x")), Var("id")))
+  expect_term_err("fun x => x)", Expected(expected=Colon, received=ThickArrow))
   
-  expect_term_err("true)", UnexpectedToken(Rparen))
+  expect_top_level(
+    "def id : forall A: Type, A := fun A: Type => fun x: A => x",
+    Definition(Leaf("id"), Pi(Some("A"), Sort(1), Var("A")), Fun("A", Sort(1), Fun("x", Var("A"), Var("x"))))
+  )
+
+  expect_top_level("#eval (fun x: Bool => x) true", Command("eval", [App(Fun("x", Bool, Var("x")), Const(Bool(true)))]))
 }

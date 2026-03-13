@@ -1,0 +1,2 @@
+
+def id : forall A: Type, A := fun x: A => x

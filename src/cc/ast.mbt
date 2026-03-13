@@ -23,18 +23,6 @@ pub type FreeVarId = UInt
 
 pub type UniverseLevel = UInt
 
-pub fn Term::prop() -> Term {
-  Sort(0)
-}
-
-pub fn Term::type_(n: UInt) -> Term {
-  Sort(n + 1)
-}
-
-pub fn Term::as_sort(self: Term) -> UniverseLevel? {
-  if self is Sort(u) { Some(u) } else { None }
-}
-
 pub fn Term::alpha_eq(self: Term, other: Term) -> Bool {
   match (self, other) {
     (Sort(u1), Sort(u2)) => u1 == u2
@@ -79,11 +67,7 @@ fn Term::parens(self: Term, wrap~: Bool, bindings~: Array[String], depth~: Int, 
 fn Term::fmt(self: Term, bindings~: Array[String], depth~: Int, logger: &Logger) -> Unit {
   match self {
     Bool => logger.write_string("Bool")
-    Sort(u) => logger.write_string(match u {
-      0 => "Prop"
-      1 => "Type"
-      _ => "Type \{u - 1}"
-    })
+    Sort(u) => logger.write_string(show_sort(u))
     BoundVar(idx) => {
       let eff_idx = bindings.length() - 1 - idx.reinterpret_as_int()
       if eff_idx < 0 {
@@ -129,7 +113,7 @@ fn Term::fmt(self: Term, bindings~: Array[String], depth~: Int, logger: &Logger)
     Let(x, val, body) => {
       logger.write_string("let ")
       logger.write_string(x)
-      logger.write_string(" = ")
+      logger.write_string(" := ")
       val.fmt(bindings~, depth~, logger)
       logger.write_string(" in ")
       bindings.push(x)
@@ -153,7 +137,9 @@ pub impl Show for Term with output(self: Term, logger: &Logger) {
 
 test "show term" {
   fn parse(input: String) -> Term raise {
-    Parser::new(Lexer::new(input).tokenise()).parse()
+    let sterm = Parser::new(Lexer::new(input).tokenise()).parse_term()
+    let elab = Elaborator::new()
+    elab.elaborate(sterm)
   }
 
   fn assert_show_expr(expr: String) raise {
@@ -192,7 +178,7 @@ test "show term" {
   assert_show_expr("(((fun x: A => x): A -> A): Prop)")
   assert_show_expr("f (g x)")
   assert_show_expr("x y z")
-  assert_show_expr("let id = fun x: A => x in id")
+  assert_show_expr("let id := fun x: A => x in id")
   assert_true(parse("Sort 0").alpha_eq(parse("Prop")))
   assert_true(parse("Sort 1").alpha_eq(parse("Type")))
   assert_true(parse("Sort 2").alpha_eq(parse("Type 1")))
