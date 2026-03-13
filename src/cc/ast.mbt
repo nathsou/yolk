@@ -3,6 +3,7 @@ pub enum Term {
   Sort(UniverseLevel) // 0 = Prop, 1 = Type 0, 2 = Type 1, ...
   Bool
   Const(Const)
+  Ref(Name)
   // locally nameless representation: bound variables are represented by their de Bruijn index, free variables have a name
   BoundVar(DeBruijnIndex)
   FreeVar(String, FreeVarId)
@@ -28,6 +29,7 @@ pub fn Term::alpha_eq(self: Term, other: Term) -> Bool {
     (Sort(u1), Sort(u2)) => u1 == u2
     (Bool, Bool) => true
     (Const(c1), Const(c2)) => c1 == c2
+    (Ref(r1), Ref(r2)) => r1 == r2
     (BoundVar(i), BoundVar(j)) => i == j
     (FreeVar(_, id1), FreeVar(_, id2)) => id1 == id2
     (App(f, x), App(g, y)) => x.alpha_eq(y) && f.alpha_eq(g)
@@ -50,7 +52,19 @@ fn Term::has_loose_bvar(self: Term, depth: DeBruijnIndex) -> Bool {
     }
     Let(_, val, body) => val.has_loose_bvar(depth) || body.has_loose_bvar(depth + 1)
     Ann(lhs, rhs) => lhs.has_loose_bvar(depth) || rhs.has_loose_bvar(depth)
-    Sort(_) | Bool | Const(_) | FreeVar(_) => false
+    Sort(_) | Bool | Const(_) | Ref(_) | FreeVar(_) => false
+  }
+}
+
+fn Term::occurs_free(self: Term, var_id: FreeVarId) -> Bool {
+  match self {
+    FreeVar(_, id) => id == var_id
+    App(f, arg) => f.occurs_free(var_id) || arg.occurs_free(var_id)
+    Lam(_, ty, body) => ty.occurs_free(var_id) || body.occurs_free(var_id)
+    Pi(_, a, b) => a.occurs_free(var_id) || b.occurs_free(var_id)
+    Let(_, val, body) => val.occurs_free(var_id) || body.occurs_free(var_id)
+    Ann(lhs, rhs) => lhs.occurs_free(var_id) || rhs.occurs_free(var_id)
+    Sort(_) | Bool | Const(_) | Ref(_) | BoundVar(_) => false
   }
 }
 
@@ -77,6 +91,7 @@ fn Term::fmt(self: Term, bindings~: Array[String], depth~: Int, logger: &Logger)
       }
     }
     FreeVar(name, _) => logger.write_string(name)
+    Ref(name) => logger.write_object(name)
     Const(c) => c.output(logger)
     App(lhs, rhs) => {
       let lhs_needs_parens = lhs is Lam(_)
@@ -139,7 +154,7 @@ test "show term" {
   fn parse(input: String) -> Term raise {
     let sterm = Parser::new(Lexer::new(input).tokenise()).parse_term()
     let elab = Elaborator::new()
-    elab.elaborate(sterm)
+    elab.elaborate_term(sterm)
   }
 
   fn assert_show_expr(expr: String) raise {

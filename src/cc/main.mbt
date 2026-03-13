@@ -3,8 +3,9 @@ fn run(path: String) -> Unit raise {
   let contents = @fs.read_file_to_string(path)
   let tokens = Lexer::new(contents).tokenise()
   let parser = Parser::new(tokens)
-  let top_level = parser.parse()
-  println(top_level)
+  let program = parser.parse()
+  let elab = Elaborator::new()
+  elab.elaborate(program)
 }
 
 fn main {

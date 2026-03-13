@@ -1,2 +1,8 @@
 
-def id : forall A: Type, A := fun x: A => x
+def id : forall A : Type, A -> A := fun A: Type => fun x: A => x
+
+def a_imp_b_imp_a : forall A : Prop, forall B : Prop, A -> B -> A :=
+    fun A : Prop => fun B : Prop => fun x : A => fun y : B => x
+
+#check a_imp_b_imp_a
+#eval id Bool true

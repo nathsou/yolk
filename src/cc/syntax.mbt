@@ -11,11 +11,16 @@ pub enum STerm {
   Ann(STerm, STerm)
 } derive(Eq)
 
-
-pub enum TopLevel {
-  Definition(Name, STerm, STerm)
-  Command(String, Array[STerm])
+pub enum Decl[T] {
+  Definition(T, T) // type, body
 } derive(Eq)
+
+pub enum TopLevel[T] {
+  Declaration(Name, Decl[T])
+  Command(String, Array[T])
+} derive(Eq)
+
+pub struct Program[T](Array[TopLevel[T]])
 
 pub enum Name {
   Leaf(String)
@@ -115,9 +120,9 @@ pub impl Show for STerm with output(self: STerm, logger: &Logger) {
   }
 }
 
-pub impl Show for TopLevel with output(self: TopLevel, logger: &Logger) {
+pub impl[T: Show] Show for TopLevel[T] with output(self: TopLevel[T], logger: &Logger) {
   match self {
-    Definition(name, ty, val) => {
+    Declaration(name, Definition(ty, val)) => {
       logger.write_string("def ")
       name.output(logger)
       logger.write_string(" : ")
@@ -126,8 +131,17 @@ pub impl Show for TopLevel with output(self: TopLevel, logger: &Logger) {
       val.output(logger)
     }
     Command(cmd, args) => {
+      logger.write_char('#')
       logger.write_string(cmd)
-      logger.write_iter(args.iter(), prefix=" ", sep=" ")
+      
+      for arg in args {
+        logger.write_char(' ')
+        arg.output(logger)
+      }
     }
   }
+}
+
+pub impl[T: Show] Show for Program[T] with output(self: Program[T], logger: &Logger) {
+  logger.write_iter(self.0.iter(), sep="\n\n", prefix="", suffix="")
 }

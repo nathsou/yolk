@@ -2,21 +2,26 @@
 struct Context {
   mut next_free_var_id: UInt
   free_vars: Map[FreeVarId, Term]
+  env: GlobalEnv
 }
 
-pub fn Context::new() -> Context {
-  { next_free_var_id: 0, free_vars: {} }
-}
+pub fn Context::from(elab: Elaborator) -> Context raise {
+  let ctx: Context = {
+    env: elab.env,
+    next_free_var_id: elab.free_vars.length().reinterpret_as_uint(),
+    free_vars: {},
+  }
 
-/// Parses a term from a string, updating the context's next_free_var_id to account for any free variables introduced by the term
-pub fn Context::parse_term(self: Context, input: String) -> Term raise {
-  let tokens = Lexer::new(input).tokenise()
-  let parser = Parser::new(tokens)
-  let s_term = parser.parse_term()
-  let elab = Elaborator::new()
-  let term = elab.elaborate(s_term)
-  self.next_free_var_id += elab.free_vars.length().reinterpret_as_uint()
-  term
+  // check that all the top-level declarations are well-typed
+  for decl in ctx.env.decls.values() {
+    match decl {
+      Definition(ty, body) => {
+        ctx.check(body, ty)
+      }
+    }
+  }
+
+  ctx
 }
 
 fn Context::fresh_var_id(self: Context) -> FreeVarId {
@@ -37,6 +42,16 @@ fn Context::lookup_free_var(self: Context, var_id: FreeVarId) -> Term? {
 
 fn Context::normalise(self: Context, term: Term) -> Term {
   match term {
+    Ref(name) => {
+      // delta reduction: unfold definitions
+      if self.env.decls.get(name) is Some(decl) {
+        match decl {
+          Definition(_, body) => self.normalise(body)
+        }
+      } else {
+        Ref(name)
+      }
+    }
     App(lhs, rhs) => {
       let lhs_norm = self.normalise(lhs)
       let rhs_norm = self.normalise(rhs)
@@ -98,8 +113,18 @@ pub fn Context::whnf(self: Context, term: Term) -> Term {
       }
     }
     Let(_, val, body) => {
-      // Zeta reduction
+      // zeta reduction
       self.whnf(instantiate(body, 0, val))
+    }
+    Ref(name) => {
+      // delta reduction
+      if self.env.decls.get(name) is Some(decl) {
+        match decl {
+          Definition(_, body) => self.whnf(body)
+        }
+      } else {
+        Ref(name)
+      }
     }
     Ann(lhs, _) => self.whnf(lhs)
     Lam(_) | Pi(_) | Sort(_) | Bool | Const(_) | BoundVar(_) | FreeVar(_) => term
@@ -114,7 +139,7 @@ fn instantiate(term: Term, idx: DeBruijnIndex, s: Term) -> Term {
     App(f, arg) => App(instantiate(f, idx, s), instantiate(arg, idx, s))
     Let(x, val, body) => Let(x, instantiate(val, idx, s), instantiate(body, idx + 1, s))
     Ann(lhs, rhs) => Ann(instantiate(lhs, idx, s), instantiate(rhs, idx, s))
-    Sort(_) | Bool | Const(_) | BoundVar(_) | FreeVar(_) => term
+    Sort(_) | Bool | Const(_) | Ref(_) | BoundVar(_) | FreeVar(_) => term
   }
 }
 
@@ -130,7 +155,7 @@ fn close(term: Term, var_id: FreeVarId, idx: DeBruijnIndex) -> Term {
     App(f, arg) => App(close(f, var_id, idx), close(arg, var_id, idx))
     Let(x, val, body) => Let(x, close(val, var_id, idx), close(body, var_id, idx + 1))
     Ann(lhs, rhs) => Ann(close(lhs, var_id, idx), close(rhs, var_id, idx))
-    Sort(_) | Bool | Const(_) | BoundVar(_) | FreeVar(_) => term
+    Sort(_) | Bool | Const(_) | Ref(_) | BoundVar(_) | FreeVar(_) => term
   }
 }
 
@@ -151,6 +176,16 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
     Sort(u) => Sort(u + 1) // Prop : Type 0, Type u : Type (u + 1)
     Bool => Sort(1) // Type 0
     Const(c) => match c { Bool(_) => Bool }
+    Ref(name) => {
+      if self.env.decls.get(name) is Some(decl) {
+        match decl {
+          // we already checked that the environment is well-formed
+          Definition(ty, _) => ty
+        }
+      } else {
+        raise TypeError(term, "Unbound reference '\{name}'")
+      }
+    }
     BoundVar(_) => raise TypeError(term, "BoundVar")
     FreeVar(name, var_id) => {
       if self.lookup_free_var(var_id) is Some(t) {
@@ -177,8 +212,9 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
       let fresh_x = self.declare_fresh(arg_ty)
       defer self.free_vars.remove(fresh_x)
       let body_ty = self.infer(open(body, 0, x, fresh_x))
+      let x = if body_ty.occurs_free(fresh_x) { Some(x) } else { None }
 
-      Pi(Some(x), arg_ty, close(body_ty, fresh_x, 0))
+      Pi(x, arg_ty, close(body_ty, fresh_x, 0))
     }
     Pi(x, arg_ty, body_ty) => {
       let s1 = self.infer(arg_ty)
@@ -259,12 +295,19 @@ pub fn Context::is_definitionally_equal(self: Context, term: Term, expected: Ter
   }
 }
 
+fn elab_term(term: String) -> (Context, Term) raise {
+  let s_term = Parser::new(Lexer::new(term).tokenise()).parse_term()
+  let elab = Elaborator::new()
+  let term_elab = elab.elaborate_term(s_term)
+  (Context::from(elab), term_elab)
+}
+
 test "normalisation" {
   fn assert_nf(term: String, nf: String) -> Unit raise {
-    let ctx = Context::new()
-    let term_ast = ctx.parse_term(term)
-    if !ctx.normalise(term_ast).alpha_eq(ctx.parse_term(nf)) {
-      fail("Expected normal form of '\{term}' to be '\{nf}', got '\{ctx.normalise(term_ast)}'")
+    let (ctx, term_elab) = elab_term(term)
+    let (_, nf_elab) = elab_term(nf)
+    if !ctx.normalise(term_elab).alpha_eq(nf_elab) {
+      fail("Expected normal form of '\{term}' to be '\{nf}', got '\{ctx.normalise(term_elab)}'")
     }
   }
 
@@ -297,14 +340,15 @@ test "normalisation" {
 
 test "type checking" {
   fn assert_type(term: String, ty: String) -> Unit raise {
-    let ctx = Context::new()
-    ctx.check(ctx.parse_term(term), ctx.parse_term(ty))
+    let (ctx, term_elab) = elab_term(term)
+    let (_, ty_elab) = elab_term(ty)
+    ctx.check(term_elab, ty_elab)
   }
 
   fn assert_type_err(term: String) -> Unit raise {
-    let ctx = Context::new()
+    let (ctx, term_elab) = elab_term(term)
 
-    try ({ let _ = ctx.infer(ctx.parse_term(term)) }) catch {
+    try ({ let _ = ctx.infer(term_elab) }) catch {
       _ => ()
     } noraise {
       _ => fail("Expected type error for '\{term}', but typing succeeded")

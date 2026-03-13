@@ -244,17 +244,17 @@ fn Parser::expect_var(self: Parser) -> String raise ParserError {
   }
 }
 
-pub fn Parser::parse(self: Parser) -> Array[TopLevel] raise ParserError {
-  let top_level: Array[TopLevel] = []
+pub fn Parser::parse(self: Parser) -> Program[STerm] raise ParserError {
+  let elems: Array[TopLevel[STerm]] = []
 
   while self.index < self.tokens.length() {
-    top_level.push(self.parse_top_level())
+    elems.push(self.parse_top_level())
   }
 
-  top_level
+  Program(elems)
 }
 
-fn Parser::parse_top_level(self: Parser) -> TopLevel raise ParserError {
+fn Parser::parse_top_level(self: Parser) -> TopLevel[STerm] raise ParserError {
   match self.peek() {
     Def => self.parse_definition()
     Hash => self.parse_command()
@@ -283,17 +283,17 @@ fn Parser::parse_name(self: Parser) -> Name raise ParserError {
   }
 }
 
-fn Parser::parse_definition(self: Parser) -> TopLevel raise ParserError {
+fn Parser::parse_definition(self: Parser) -> TopLevel[STerm] raise ParserError {
   self.expect(Def)
   let name = self.parse_name()
   self.expect(Colon)
   let ty = self.parse_term()
   self.expect(ColonEqual)
   let body = self.parse_term()
-  Definition(name, ty, body)
+  Declaration(name, Definition(ty, body))
 }
 
-fn Parser::parse_command(self: Parser) -> TopLevel raise ParserError {
+fn Parser::parse_command(self: Parser) -> TopLevel[STerm] raise ParserError {
   self.expect(Hash)
   let name = self.expect_var()
   let args: Array[STerm] = []
@@ -420,7 +420,7 @@ test "parser" {
     Parser::new(tokens).parse_term()
   }
 
-  fn parse_top_level(input: String) -> TopLevel raise {
+  fn parse_top_level(input: String) -> TopLevel[STerm] raise {
     let tokens = Lexer::new(input).tokenise()
     Parser::new(tokens).parse_top_level()
   }
@@ -432,7 +432,7 @@ test "parser" {
     }
   }
 
-  fn expect_top_level(input: String, expected_top_level: TopLevel) raise {
+  fn expect_top_level(input: String, expected_top_level: TopLevel[STerm]) raise {
     let parsed = parse_top_level(input)
     if parsed != expected_top_level {
       fail("Expected top-level '\{expected_top_level}', got '\{parsed}'")
@@ -482,7 +482,7 @@ test "parser" {
   
   expect_top_level(
     "def id : forall A: Type, A := fun A: Type => fun x: A => x",
-    Definition(Leaf("id"), Pi(Some("A"), Sort(1), Var("A")), Fun("A", Sort(1), Fun("x", Var("A"), Var("x"))))
+    Declaration(Leaf("id"), Definition(Pi(Some("A"), Sort(1), Var("A")), Fun("A", Sort(1), Fun("x", Var("A"), Var("x")))))
   )
 
   expect_top_level("#eval (fun x: Bool => x) true", Command("eval", [App(Fun("x", Bool, Var("x")), Const(Bool(true)))]))
