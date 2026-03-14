@@ -61,7 +61,7 @@ pub fn show_sort(u: UniverseLevel) -> String {
   }
 }
 
-fn STerm::parens(self: STerm, wrap~: Bool, logger: &Logger) -> Unit {
+fn STerm::parens(self: STerm, wrap: Bool, logger: &Logger) -> Unit {
   if wrap {
     logger.write_char('(')
   }
@@ -80,9 +80,9 @@ pub impl Show for STerm with output(self: STerm, logger: &Logger) {
     App(lhs, rhs) => {
       let lhs_needs_parens = lhs is (Fun(_) | Pi(_) | Let(_) | Ann(_))
       let rhs_needs_parens = rhs is (Fun(_) | Pi(_) | Let(_) | Ann(_))
-      lhs.parens(wrap=lhs_needs_parens, logger)
+      lhs.parens(lhs_needs_parens, logger)
       logger.write_char(' ')
-      rhs.parens(wrap=rhs_needs_parens, logger)
+      rhs.parens(rhs_needs_parens, logger)
     }
     Fun(x, ty, body) => {
       logger.write_string("fun ")
@@ -101,9 +101,9 @@ pub impl Show for STerm with output(self: STerm, logger: &Logger) {
       b.output(logger)
     }
     Pi(None, a, b) => {
-      a.parens(wrap=a is Pi(_), logger)
+      a.parens(a is Pi(_), logger)
       logger.write_string(" -> ")
-      b.output(logger)
+      b.parens(b is Pi(Some(_), _, _), logger)
     }
     Let(x, val, body) => {
       logger.write_string("let ")
@@ -114,7 +114,7 @@ pub impl Show for STerm with output(self: STerm, logger: &Logger) {
       body.output(logger)
     }
     Ann(e, ty) => {
-      e.parens(wrap=e is (App(_) | Fun(_) | Pi(_) | Let(_)), logger)
+      e.parens(e is (App(_) | Fun(_) | Pi(_) | Let(_)), logger)
       logger.write_string(": ")
       ty.output(logger)
     }
