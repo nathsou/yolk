@@ -1,8 +1,8 @@
 
 pub enum Token {
-  Lparen; Rparen; ThickArrow; Arrow; Colon; Comma; Dot; Hash
-  Sort; Prop; Type; Fun; Forall; Let; In; ColonEqual; Def; Axiom
-  True; False; Nat(UInt); Var(String); Bool
+  Lparen; Rparen; ThickArrow; Arrow; Colon; Comma; Dot; Hash; Pipe
+  Sort; Prop; Type; Fun; Forall; Let; In; ColonEqual; Def; Axiom; Inductive
+  True; False; Nat(UInt); Var(String); Path(Name); Bool
 } derive(Show, Eq)
 
 pub suberror LexerError {
@@ -38,12 +38,16 @@ fn is_alphanumeric(c: Char) -> Bool {
   is_alpha(c) || is_digit(c)
 }
 
+fn Lexer::has_next(self: Lexer) -> Bool {
+  self.index < self.input.length()
+}
+
 fn Lexer::peek(self: Lexer) -> Char {
   self.input[self.index]
 }
 
 fn Lexer::matches(self: Lexer, char: Char) -> Bool {
-  self.peek() == char
+  self.has_next() && self.peek() == char
 }
 
 fn Lexer::consumes(self: Lexer, char: Char) -> Bool {
@@ -133,6 +137,7 @@ fn Lexer::next(self: Lexer) -> LexerResult {
       }
     }
     '#' => { self.advance(); Yay(Hash) }
+    '|' => { self.advance(); Yay(Pipe) }
     _ => {
       if is_alpha(char) {
         let identifier = self.parse_identifier()
@@ -144,6 +149,7 @@ fn Lexer::next(self: Lexer) -> LexerResult {
           "let" => Yay(Let)
           "in" => Yay(In)
           "def" => Yay(Def)
+          "inductive" => Yay(Inductive)
           "true" => Yay(True)
           "false" => Yay(False)
           "Bool" => Yay(Bool)
@@ -151,7 +157,19 @@ fn Lexer::next(self: Lexer) -> LexerResult {
           "Prop" => Yay(Prop)
           "Type" => Yay(Type)
           _ => {
-            Yay(Var(identifier))
+            if self.matches('.') {
+              let mut name = Name::Leaf(identifier)
+
+              while self.matches('.') {
+                self.advance()
+                let part = self.parse_identifier()
+                name = Name::Path(name, part)
+              }
+
+              Yay(Path(name))
+            } else {
+              Yay(Var(identifier))
+            }
           }
         }
       } else if is_digit(char) {
@@ -260,6 +278,7 @@ fn Parser::parse_top_level(self: Parser) -> TopLevel[STerm] raise ParserError {
     Axiom => self.parser_axiom()
     Def => self.parse_definition()
     Hash => self.parse_command()
+    Inductive => self.parse_inductive()
     _ => raise UnexpectedToken(self.peek())
   }
 }
@@ -303,6 +322,30 @@ fn Parser::parse_definition(self: Parser) -> TopLevel[STerm] raise ParserError {
   Declaration(name, Definition(ty, body))
 }
 
+fn Parser::parse_inductive(self: Parser) -> TopLevel[STerm] raise ParserError {
+  self.expect(Inductive)
+  let name = self.parse_name()
+  let params: Array[(String, STerm)] = []
+
+  while self.peek_safe() is Some(Lparen) {
+    params.push(self.parse_binder())
+  }
+
+  self.expect(Colon)
+  let arity = self.parse_term()
+  let constructors: Array[(String, STerm)] = []
+  
+  while self.peek_safe() is Some(Pipe) {
+    self.advance()
+    let ctor_name = self.expect_var()
+    self.expect(Colon)
+    let ctor_ty = self.parse_term()
+    constructors.push((ctor_name, ctor_ty))
+  }
+
+  Declaration(name, Inductive(params~, arity~, constructors~))
+}
+
 fn Parser::parse_command(self: Parser) -> TopLevel[STerm] raise ParserError {
   self.expect(Hash)
   let name = self.expect_var()
@@ -315,12 +358,21 @@ fn Parser::parse_command(self: Parser) -> TopLevel[STerm] raise ParserError {
   Command(name, args)
 }
 
+fn Parser::parse_binder(self: Parser) -> (String, STerm) raise ParserError {
+  self.expect(Lparen)
+  let x= self.expect_var()
+  self.expect(Colon)
+  let ty = self.parse_term()
+  self.expect(Rparen)
+  (x, ty)
+}
+
 fn Parser::parse_term(self: Parser) -> STerm raise ParserError {
   match self.peek() {
     Fun => self.parse_fun()
     Forall => self.parse_forall()
     Let => self.parse_let()
-    _ => self.parse_app()
+    _ => self.parse_arrow()
   }
 }
 
@@ -355,9 +407,9 @@ fn Parser::parse_let(self: Parser) -> STerm raise ParserError {
 }
 
 fn Parser::parse_app(self: Parser) -> STerm raise ParserError {
-  let mut lhs = self.parse_arrow()
+  let mut lhs = self.parse_atom()
 
-  while (try? self.parse_arrow()) is Ok(rhs) {
+  while (try? self.parse_atom()) is Ok(rhs) {
     lhs = App(lhs, rhs)
   }
 
@@ -365,11 +417,11 @@ fn Parser::parse_app(self: Parser) -> STerm raise ParserError {
 }
 
 fn Parser::parse_arrow(self: Parser) -> STerm raise ParserError {
-  let lhs = self.parse_atom()
+  let lhs = self.parse_app()
 
   if self.matches(Arrow) {
     self.advance()
-    let rhs = self.parse_arrow()
+    let rhs = self.parse_term()
     // non-dependent Pi
     Pi(None, lhs, rhs)
   } else {
@@ -382,6 +434,10 @@ fn Parser::parse_atom(self: Parser) -> STerm raise ParserError {
     Var(x) => {
       self.advance();
       Var(x)
+    }
+    Path(name) => {
+      self.advance();
+      Ref(name)
     }
     Bool => { self.advance(); Bool }
     Prop => { self.advance(); Sort(0) }
@@ -496,4 +552,34 @@ test "parser" {
   )
 
   expect_top_level("#eval (fun x: Bool => x) true", Command("eval", [App(Fun("x", Bool, Var("x")), Const(Bool(true)))]))
+  
+  expect_top_level(
+    "inductive False : Prop",
+    Declaration(Leaf("False"), Inductive(params=[], arity=Sort(0), constructors=[]))
+  )
+
+  expect_top_level(
+    "inductive True : Prop | intro : True",
+    Declaration(Leaf("True"), Inductive(params=[], arity=Sort(0), constructors=[("intro", Var("True"))]))
+  )
+
+  expect_top_level(
+    (
+      #|inductive Vec (A : Type) : Nat -> Type
+      #|    | nil : Vec A Nat.zero
+      #|    | cons : A -> forall n : Nat, Vec A n -> Vec A (Nat.succ n)
+    ),
+    Declaration(
+      Leaf("Vec"),
+      Inductive(
+        params=[("A", Sort(1))],
+        arity=Pi(None, Var("Nat"), Sort(1)),
+        constructors=[
+          ("nil", App(App(Var("Vec"), Var("A")), Ref(Path(Leaf("Nat"), "zero")))),
+          ("cons", Pi(None, Var("A"), Pi(Some("n"), Var("Nat"), Pi(None, App(App(Var("Vec"), Var("A")), Var("n")), App(App(Var("Vec"), Var("A")), App(Ref(Path(Leaf("Nat"), "succ")), Var("n"))))))),
+        ],
+      ),
+    )
+  )
+
 }

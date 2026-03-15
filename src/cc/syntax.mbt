@@ -4,6 +4,7 @@ pub enum STerm {
   Bool
   Const(Const)
   Var(String)
+  Ref(Name)
   App(STerm, STerm)
   Fun(String, STerm, STerm)
   Pi(String?, STerm, STerm)
@@ -14,6 +15,11 @@ pub enum STerm {
 pub enum Decl[T] {
   Axiom(T) // type
   Definition(T, T) // type, body
+  Inductive(
+    params~: Array[(String, T)],
+    arity~: T,
+    constructors~: Array[(String, T)],
+  )
 } derive(Eq)
 
 pub enum TopLevel[T] {
@@ -25,16 +31,16 @@ pub struct Program[T](Array[TopLevel[T]])
 
 pub enum Name {
   Leaf(String)
-  Path(String, Name)
+  Path(Name, String)
 } derive(Eq, Hash)
 
 pub impl Show for Name with output(self: Name, logger: &Logger) {
   match self {
     Leaf(s) => logger.write_string(s)
-    Path(s, parent) => {
-      parent.output(logger)
+    Path(l, r) => {
+      logger.write_object(l)
       logger.write_char('.')
-      logger.write_string(s)
+      logger.write_string(r)
     }
   }
 }
@@ -46,7 +52,7 @@ pub fn Name::from(path: Array[String]) -> Name? {
     let mut name = Leaf(path[0])
 
     for i in 1..<path.length() {
-      name = Path(path[i], name)
+      name = Path(name, path[i])
     }
 
     Some(name)
@@ -76,6 +82,7 @@ pub impl Show for STerm with output(self: STerm, logger: &Logger) {
     Sort(u) => logger.write_string(show_sort(u))
     Bool => logger.write_string("Bool")
     Var(v) => logger.write_string(v)
+    Ref(name) => logger.write_object(name)
     Const(c) => c.output(logger)
     App(lhs, rhs) => {
       let lhs_needs_parens = lhs is (Fun(_) | Pi(_) | Let(_) | Ann(_))
@@ -136,6 +143,31 @@ pub impl[T: Show] Show for TopLevel[T] with output(self: TopLevel[T], logger: &L
       logger.write_object(ty)
       logger.write_string(" := ")
       logger.write_object(val)
+    }
+    Declaration(name, Inductive(params~, arity~, constructors~)) => {
+      logger.write_string("inductive ")
+      logger.write_object(name)
+      logger.write_char(' ')
+      
+      for param in params {
+        logger.write_char('(')
+        logger.write_string(param.0)
+        logger.write_string(": ")
+        logger.write_object(param.1)
+        logger.write_string(") ")
+      }
+
+      logger.write_string(": ")
+      logger.write_object(arity)
+      logger.write_char('\n')
+
+      for ctor in constructors {
+        logger.write_string("  | ")
+        logger.write_string(ctor.0)
+        logger.write_string(" : ")
+        logger.write_object(ctor.1)
+        logger.write_char('\n')
+      }
     }
     Command(cmd, args) => {
       logger.write_char('#')

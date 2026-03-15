@@ -25,6 +25,7 @@ pub fn Context::from(elab: Elaborator) -> Context raise {
       Definition(ty, body) => {
         ctx.check(body, ty)
       }
+      Inductive(_) => ()
     }
   }
 
@@ -55,6 +56,7 @@ fn Context::normalise(self: Context, term: Term) -> Term {
           Axiom(_) => term
           // delta reduction: unfold definitions
           Definition(_, body) => self.normalise(body)
+          Inductive(_) => term
         }
       } else {
         Ref(name)
@@ -131,6 +133,7 @@ pub fn Context::whnf(self: Context, term: Term) -> Term {
           Axiom(_) => term
           // delta reduction
           Definition(_, body) => self.whnf(body)
+          Inductive(_) => term
         }
       } else {
         Ref(name)
@@ -192,6 +195,7 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
           Axiom(ty) => ty
           // we already checked that the environment is well-formed
           Definition(ty, _) => ty
+          Inductive(_) => term
         }
       } else {
         raise TypeError(term, "Unbound reference '\{name}'")
@@ -294,8 +298,8 @@ pub fn Context::is_definitionally_equal(self: Context, term: Term, expected: Ter
   if t1_norm.alpha_eq(t2_norm) {
     true
   } else {
-    // universes are cumulative: Type u <= Type v if u <= v
     match (t1_norm, t2_norm) {
+    // universes are cumulative: Type u <= Type v if u <= v
       (Sort(u1), Sort(u2)) => u1 <= u2
       (Pi(_, a1, b1), Pi(_, a2, b2)) => {
         // Domains must be exactly equal, codomains can be cumulative

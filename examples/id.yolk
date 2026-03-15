@@ -6,3 +6,24 @@ def a_imp_b_imp_a : forall A : Prop, forall B : Prop, A -> B -> A :=
 
 #check a_imp_b_imp_a
 #eval id Bool true
+
+inductive MyBool : Type
+    | my_true : MyBool
+    | my_false : MyBool
+
+inductive List (A : Type) : Type
+    | nil : List A
+    | cons : A -> List A
+
+inductive Nat : Type
+    | zero : Nat
+    | succ : Nat -> Nat
+
+inductive Vec (A : Type) : Nat -> Type
+    | nil : Vec A Nat.zero
+    | cons : A -> forall n : Nat, Vec A n -> Vec A (Nat.succ n)
+
+inductive True : Prop
+    | intro : True
+
+inductive False : Prop

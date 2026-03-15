@@ -68,6 +68,7 @@ pub fn Elaborator::elaborate_decl(self: Elaborator, name: Name, decl: Decl[STerm
       let body_elab = self.elaborate_term(body)
       self.env.add(name, Definition(ty_elab, body_elab))
     }
+    Inductive(_) => ()
   }
 }
 
@@ -95,6 +96,13 @@ pub fn Elaborator::elaborate_term(self: Elaborator, term: STerm) -> Term raise E
         }
 
         FreeVar(v, var_id)
+      }
+    }
+    Ref(name) => {
+      if self.env.decls.contains(name) {
+        Ref(name)
+      } else {
+        raise ElaborationError::Message("Undefined reference: \{name}")
       }
     }
     App(lhs, rhs) => {
