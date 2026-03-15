@@ -94,7 +94,10 @@ fn Context::check_decl(self: Context, name: Name, decl: Decl[Term]) -> Unit rais
       self.check(body, ty)
     }
     Inductive(ty~, ..) => {
-      let _ = ensure_sort("inductive type", ty)
+      let arity_tys = ty.collect_pi_types()
+      if !(arity_tys.last() is Some(Sort(_))) {
+        raise TypeError(ty, "Invalid type for inductive '\{name}': expected a Pi type ending in a sort, got '\{ty}'")
+      }
     }
     // https://lean-lang.org/doc/reference/latest/The-Type-System/Inductive-Types/#well-formed-inductives  
     // https://ammkrn.github.io/type_checking_in_lean4/declarations/inductive.html#constructor
@@ -552,7 +555,7 @@ fn elab_term(term: String) -> (Context, Term) raise {
   let s_term = Parser::new(Lexer::new(term).tokenise()).parse_term()
   let elab = Elaborator::new()
   let term_elab = elab.elaborate_term(s_term)
-  (Context::new(), term_elab)
+  (elab.ctx, term_elab)
 }
 
 test "normalisation" {
@@ -741,4 +744,86 @@ test "type checking" {
     let ncontra_ty = "forall A: Prop, (forall C: Prop, (A -> (A -> (\{false_ty})) -> C) -> C) -> (\{false_ty})"
     assert_type(ncontra, ncontra_ty)
   }
+}
+
+test "declarations" {
+  fn elab_program(program: String) -> Context raise {
+    let prog = Parser::new(Lexer::new(program).tokenise()).parse()
+    let elab = Elaborator::new()
+    elab.elaborate(prog)
+    elab.ctx
+  }
+
+  fn assert_ok(program: String) -> Unit raise {
+    try elab_program(program) |> ignore catch {
+      err => {
+        fail("Invalid program: '\{err}'\n\{program}")
+      }
+    }
+  }
+
+  fn assert_not_ok(program: String) -> Unit raise {
+    try elab_program(program) |> ignore catch {
+      _ => ()
+    } noraise {
+      _ => fail("Expected invalid program:\n\{program}")
+    }
+  }
+
+  assert_ok("inductive False : Prop")
+  assert_ok("inductive True : Prop | intro : True")
+  assert_ok("inductive MyList (A : Type) : Type | nil : MyList A | cons : A -> MyList A")
+
+  assert_ok((
+    #|inductive MyTree (A : Type) : Type
+    #|  | leaf : A -> MyTree A  
+    #|  | node : MyTree A -> MyTree A -> MyTree A
+  ))
+
+  assert_ok((
+    #|inductive WellFormedRecursive : Type
+    #|  | intro : WellFormedRecursive -> WellFormedRecursive
+  ))
+
+  assert_ok((
+    #| inductive Vec (A : Type) : Nat -> Type
+    #|  | nil : Vec A Nat.zero
+    #|  | cons : A -> forall n : Nat, Vec A n -> Vec A (Nat.succ n)
+  ))
+  
+  // duplicate declaration
+  assert_not_ok((
+    #|inductive A : Type
+    #|inductive A : Type
+  ))
+
+  // duplicate constructor
+  assert_not_ok("inductive A : Type | mk : A | mk : A")
+  
+  // non-type constructor parameter
+  assert_not_ok((
+    #|inductive IllFormed1 (A : Type) : Type
+    #|  | intro : Nat.zero -> IllFormed1 A
+  ))
+
+  // non-sort inductive type
+  assert_not_ok("inductive IllFormed2 (A : Type) : Nat")
+
+  // Invalid universe level in constructor
+  assert_not_ok((
+    #|inductive IllFormed3 : Sort 3
+    #|  | intro : Sort 4 -> IllFormed3
+  ))
+
+  // non strictly-positive occurrence of inductive type in constructor
+  assert_not_ok((
+    #|inductive IllFormed4 : Type
+    #|  | intro : (IllFormed4 -> IllFormed4) -> IllFormed4
+  ))
+  
+  // invalid constructor result type
+  assert_not_ok((
+    #|inductive IllFormed5 : Type
+    #|  | nope : Nat -> Bool
+  ))
 }

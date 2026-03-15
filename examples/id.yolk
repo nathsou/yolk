@@ -42,21 +42,6 @@ def Not.intro : forall P : Prop, (P -> False) -> Not P := fun P : Prop => fun h 
 #check Not.intro (And True False)
 #check Vec.cons
 
--- inductive Fix (f : Type -> Type) : Type
---   | fix : f (Fix f) -> Fix f
-
--- inductive IllFormed1 (A : Type) : Type
---  | intro : Nat.zero -> IllFormed1 A
-
--- inductive IllFormed2 : Sort 3
---   | intro : Sort 4 -> IllFormed2
-
-inductive WellFormedRecursive : Type
-  | intro : WellFormedRecursive -> WellFormedRecursive
-
--- inductive IllFormed3 : Type
---   | intro : (IllFormed3 -> IllFormed3) -> IllFormed3
-
 inductive Tree (A : Type) : Type
   | leaf : A -> Tree A
   | node : Tree A -> Tree A -> Tree A
