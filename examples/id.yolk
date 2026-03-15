@@ -8,22 +8,60 @@ def a_imp_b_imp_a : forall A : Prop, forall B : Prop, A -> B -> A :=
 #eval id Bool true
 
 inductive MyBool : Type
-    | my_true : MyBool
-    | my_false : MyBool
+  | my_true : MyBool
+  | my_false : MyBool
 
 inductive List (A : Type) : Type
-    | nil : List A
-    | cons : A -> List A
+  | nil : List A
+  | cons : A -> List A
 
 inductive Nat : Type
-    | zero : Nat
-    | succ : Nat -> Nat
+  | zero : Nat
+  | succ : Nat -> Nat
 
 inductive Vec (A : Type) : Nat -> Type
-    | nil : Vec A Nat.zero
-    | cons : A -> forall n : Nat, Vec A n -> Vec A (Nat.succ n)
+  | nil : Vec A Nat.zero
+  | cons : A -> forall n : Nat, Vec A n -> Vec A (Nat.succ n)
 
 inductive True : Prop
-    | intro : True
+  | intro : True
 
 inductive False : Prop
+
+inductive And (P : Prop) (Q : Prop) : Prop
+  | intro : And P Q
+
+def one : Nat := Nat.succ Nat.zero
+def two : Nat := Nat.succ one
+def three : Nat := Nat.succ two
+
+#check Vec (List Bool) three
+
+def vec1 : Vec Bool one := Vec.cons Bool true Nat.zero (Vec.nil Bool)
+def vec2 : Vec Bool two := Vec.cons Bool false one vec1
+def vec3 : Vec Bool three := Vec.cons Bool false two vec2
+
+#eval vec3
+
+def Not : Prop -> Prop := fun P : Prop => P -> False
+
+def Not.intro : forall P : Prop, (P -> False) -> Not P := fun P : Prop => fun h : P -> False => h
+
+#check Not.intro (And True False)
+#check Vec.cons
+
+-- inductive IllFormed1 (A : Type) : Type
+--  | intro : Nat.zero -> IllFormed1 A
+
+-- inductive IllFormed2 : Sort 3
+--   | intro : Sort 4 -> IllFormed2
+
+inductive WellFormedRecursive : Type
+  | intro : WellFormedRecursive -> WellFormedRecursive
+
+-- inductive IllFormed3 : Type
+--   | intro : (IllFormed3 -> IllFormed3) -> IllFormed3
+
+inductive Tree (A : Type) : Type
+  | leaf : A -> Tree A
+  | node : Tree A -> Tree A -> Tree A

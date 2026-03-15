@@ -1,6 +1,7 @@
 import {
     "moonbitlang/core/argparse",
-    "moonbitlang/x/fs"
+    "moonbitlang/x/fs",
+    "moonbitlang/core/uint",
 }
 
 options(

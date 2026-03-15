@@ -1,28 +1,26 @@
 
 pub struct Elaborator {
   bound_vars: Array[String]
-  free_vars: Map[String, FreeVarId]
-  env: GlobalEnv
+  mut inductive_type_being_defined: Name?
+  ctx: Context
 }
 
 pub suberror ElaborationError {
   Message(String)
 }
 
-pub struct GlobalEnv {
-  decls: Map[Name, Decl[Term]]
-}
-
-pub fn GlobalEnv::add(self: GlobalEnv, name: Name, decl: Decl[Term]) -> Unit raise ElaborationError {
-  if self.decls.contains(name) {
-    raise Message("Duplicate declaration: \{name}")
+pub impl Show for ElaborationError with output(self: ElaborationError, logger: &Logger) {
+  match self {
+    Message(msg) => logger.write_string(msg)
   }
-
-  self.decls[name] = decl
 }
 
 pub fn Elaborator::new() -> Elaborator {
-  { bound_vars: [], free_vars: {}, env: { decls: {} } }
+  {
+    bound_vars: [],
+    inductive_type_being_defined: None,
+    ctx: Context::new(),
+  }
 }
 
 pub fn Elaborator::elaborate(self: Elaborator, program: Program[STerm]) -> Unit raise {
@@ -43,13 +41,12 @@ pub fn Elaborator::run_command(self: Elaborator, name: String, args: Array[STerm
         raise ElaborationError::Message("'\{name}' command expects exactly one argument")
       }
 
-      let ctx = Context::from(self)
-      let ty = ctx.infer(args_elab[0])
+      let ty = self.ctx.infer(args_elab[0])
 
       if name == "check" {
         println(ty)
       } else {
-        let nf = ctx.normalise(args_elab[0])
+        let nf = self.ctx.normalise(args_elab[0])
         println(nf)
       }
     }
@@ -57,22 +54,53 @@ pub fn Elaborator::run_command(self: Elaborator, name: String, args: Array[STerm
   }
 }
 
-pub fn Elaborator::elaborate_decl(self: Elaborator, name: Name, decl: Decl[STerm]) -> Unit raise ElaborationError {
+pub fn Elaborator::elaborate_decl(self: Elaborator, name: Name, decl: Decl[STerm]) -> Unit raise {
   match decl {
     Axiom(ty) => {
       let ty_elab = self.elaborate_term(ty)
-      self.env.add(name, Axiom(ty_elab))
+      self.ctx.add_decl(name, Axiom(ty_elab))
     }
     Definition(ty, body) => {
       let ty_elab = self.elaborate_term(ty)
       let body_elab = self.elaborate_term(body)
-      self.env.add(name, Definition(ty_elab, body_elab))
+      self.ctx.add_decl(name, Definition(ty_elab, body_elab))
     }
-    Inductive(_) => ()
+    Inductive(params~, arity~, constructors~, ty~) => {
+      self.inductive_type_being_defined = Some(name)
+      let original_bound_vars_len = self.bound_vars.length()
+      defer {
+        self.inductive_type_being_defined = None
+        self.bound_vars.truncate(original_bound_vars_len)
+      }
+
+      let params_elab: Array[(String, Term)] = []
+      
+      for param in params {
+        self.bound_vars.push(param.0)
+        params_elab.push((param.0, self.elaborate_term(param.1)))
+      }
+
+      let arity_elab = self.elaborate_term(arity)
+      let constructors_elab = constructors.map(ctor => (ctor.0, self.elaborate_term(ctor.1)))
+      let ty_elab = self.elaborate_term(ty)
+      self.ctx.add_decl(name, Inductive(params=params_elab, arity=arity_elab, constructors=constructors_elab, ty=ty_elab))
+
+      for ctor in constructors {
+        let mut ctor_ty = ctor.1
+        
+        for arg in params.rev_iter() {
+          ctor_ty = Pi(Some(arg.0), arg.1, ctor_ty)
+        }
+
+        let ctor_ty_elab = self.elaborate_term(ctor_ty)
+        self.ctx.add_decl(Path(name, ctor.0), Constructor(inductive_name=name, ty=ctor_ty_elab))
+      }
+    }
+    Constructor(_) => raise ElaborationError::Message("Constructors must be declared as part of an inductive type")
   }
 }
 
-pub fn Elaborator::elaborate_term(self: Elaborator, term: STerm) -> Term raise ElaborationError {
+pub fn Elaborator::elaborate_term(self: Elaborator, term: STerm) -> Term raise {
   match term {
     Sort(u) => Sort(u)
     Bool => Bool
@@ -84,22 +112,14 @@ pub fn Elaborator::elaborate_term(self: Elaborator, term: STerm) -> Term raise E
         }
       }
 
-      if self.env.decls.contains(Leaf(v)) {
+      if self.ctx.env.decls.contains(Leaf(v)) || (self.inductive_type_being_defined is Some(Leaf(ind)) && ind == v) {
         Ref(Leaf(v))
       } else {
-        let var_id: FreeVarId = if self.free_vars.get(v) is Some(var_id) {
-          var_id
-        } else {
-          let var_id = self.free_vars.length().reinterpret_as_uint()
-          self.free_vars[v] = var_id
-          var_id
-        }
-
-        FreeVar(v, var_id)
+        raise ElaborationError::Message("Undefined variable: '\{v}'")
       }
     }
     Ref(name) => {
-      if self.env.decls.contains(name) {
+      if self.ctx.env.decls.contains(name) {
         Ref(name)
       } else {
         raise ElaborationError::Message("Undefined reference: \{name}")

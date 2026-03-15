@@ -19,8 +19,23 @@ pub enum Decl[T] {
     params~: Array[(String, T)],
     arity~: T,
     constructors~: Array[(String, T)],
+    ty~: T,
+  )
+  Constructor(
+    inductive_name~: Name,
+    ty~: T
   )
 } derive(Eq)
+
+pub fn Decl::inductive(params~: Array[(String, STerm)], arity~: STerm, constructors~: Array[(String, STerm)]) -> Decl[STerm] {
+  let mut ty = arity
+
+  for param in params.rev_iter() {
+    ty = Pi(Some(param.0), param.1, ty)
+  }
+
+  Inductive(params~, arity~, constructors~, ty~)
+}
 
 pub enum TopLevel[T] {
   Declaration(Name, Decl[T])
@@ -144,7 +159,7 @@ pub impl[T: Show] Show for TopLevel[T] with output(self: TopLevel[T], logger: &L
       logger.write_string(" := ")
       logger.write_object(val)
     }
-    Declaration(name, Inductive(params~, arity~, constructors~)) => {
+    Declaration(name, Inductive(params~, arity~, constructors~, ty=_)) => {
       logger.write_string("inductive ")
       logger.write_object(name)
       logger.write_char(' ')
@@ -168,6 +183,12 @@ pub impl[T: Show] Show for TopLevel[T] with output(self: TopLevel[T], logger: &L
         logger.write_object(ctor.1)
         logger.write_char('\n')
       }
+    }
+    Declaration(name, Constructor(inductive_name=_, ty~)) => {
+      logger.write_string("constructor ")
+      logger.write_object(name)
+      logger.write_string(" : ")
+      logger.write_object(ty)
     }
     Command(cmd, args) => {
       logger.write_char('#')

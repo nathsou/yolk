@@ -1,44 +1,229 @@
 
+struct GlobalEnv {
+  decls: Map[Name, Decl[Term]]
+}
+
+fn GlobalEnv::new() -> GlobalEnv {
+  { decls: {} }
+}
+
+fn GlobalEnv::add(self: GlobalEnv, name: Name, decl: Decl[Term]) -> Unit raise TypeCheckError {
+  if self.decls.contains(name) {
+    raise DuplicateDeclaration(name)
+  }
+
+  self.decls[name] = decl
+}
+
 struct Context {
-  mut next_free_var_id: UInt
+  mut next_free_var_id: FreeVarId 
   free_vars: Map[FreeVarId, Term]
   env: GlobalEnv
 }
 
-pub fn Context::from(elab: Elaborator) -> Context raise {
-  let ctx: Context = {
-    env: elab.env,
-    next_free_var_id: elab.free_vars.length().reinterpret_as_uint(),
+pub fn Context::new() -> Context {
+  {
+    env: GlobalEnv::new(),
+    next_free_var_id: 0,
     free_vars: {},
   }
+}
 
-  // check that all the top-level declarations are well-typed
-  for name, decl in ctx.env.decls.iter2() {
-    match decl {
-      Axiom(ty) => {
-        let s = ctx.infer(ty)
+pub fn Context::add_decl(self: Context, name: Name, decl: Decl[Term]) -> Unit raise TypeCheckError {
+  self.check_decl(name, decl)
+  self.env.add(name, decl)
+}
 
-        if !(s is Sort(_)) {
-          raise TypeError(ty, "Invalid type for axiom '\{name}'")
-        }
+fn Context::check_decl(self: Context, name: Name, decl: Decl[Term]) -> Unit raise TypeCheckError {
+  let ensure_sort = (decl_name: String, ty: Term) => {
+    match self.whnf(self.infer(ty)) {
+      Sort(u)  => u
+      t => {
+        raise TypeError(ty, "Invalid type for '\{decl_name}' '\{name}': expected a sort, got '\{t}'")
       }
-      Definition(ty, body) => {
-        ctx.check(body, ty)
-      }
-      Inductive(_) => ()
     }
   }
 
-  ctx
+  // check that all the top-level declarations are well-typed
+  match decl {
+    Axiom(ty) => { let _ = ensure_sort("axiom", ty) }
+    Definition(ty, body) => {
+      let _ = ensure_sort("definition", ty)
+      self.check(body, ty)
+    }
+    Inductive(ty~, ..) => {
+      let _ = ensure_sort("inductive type", ty)
+    }
+    // https://ammkrn.github.io/type_checking_in_lean4/declarations/inductive.html#constructor
+    Constructor(inductive_name~, ty~) => {
+      if self.env.decls.get(inductive_name) is Some(Inductive(params~, arity~, ..)) {
+        let _ = ensure_sort("constructor", ty)
+        let arity_tys = arity.collect_pi_types()
+        let ind_level = match arity_tys.last() {
+          Some(Sort(u)) => u
+          last => raise TypeError(ty, "Invalid constructor type for '\{name}': expected resulting type to be a sort, got '\{last}'")
+        }
+
+        // 1. The constructor's type/telescope has to share the same parameters as the type of the inductive being declared.
+        let mut rem_ty = ty
+        let free_vars_to_remove: Array[FreeVarId] = []
+        defer {
+          for var_id in free_vars_to_remove {
+            self.free_vars.remove(var_id)
+          }
+        }
+        
+        for param in params {
+          let (_, param_ty) = param
+
+          match rem_ty {
+            Pi(x, a, b) => {
+              if !self.is_definitionally_equal(a, param_ty) {
+                raise TypeError(ty, "Constructor '\{name}' parameter type '\{a}' does not match inductive type '\{inductive_name}' parameter type '\{param_ty}'")
+              }
+              
+              rem_ty = if x is Some(x) {
+                let fresh_x = self.declare_fresh(param_ty)
+                free_vars_to_remove.push(fresh_x)
+                open(b, 0, x, fresh_x)
+              } else {
+                b
+              }
+            }
+            _ => raise TypeError(ty, "Constructor '\{name}' has too few parameters compared to inductive type '\{inductive_name}'")
+          }
+        }
+        
+
+        let mut arg_idx = 0
+        // 2. For the non-parameter elements of the constructor type's telescope, the binder type must actually be a type (must infer as Sort _).
+        // 3. For any non-parameter element of the constructor type's telescope, the element's inferred sort must be less than or equal to the inductive type's sort
+        // or the inductive type being declared has to be a Prop.
+        // 4. No argument to the constructor may contain a non strictly-positive occurrence of the type being declared
+        while rem_ty is Pi(x, arg_ty, rest) {
+          let s = self.infer(arg_ty)
+          if self.whnf(s) is Sort(u) {
+            if ind_level > 0 && u > ind_level {
+              raise TypeError(ty, "Invalid universe level in constructor '\{name}': Parameter has type '\{arg_ty}' at universe level '\{u}' which is not less than or equal to the inductive type's resulting universe level '\{ind_level}'")
+            }
+
+            if !self.is_strictly_positive(arg_ty, inductive_name) {
+              raise TypeError(ty, "Constructor '\{name}' has a non strictly-positive occurrence of the inductive type being declared in argument #\{arg_idx + 1}")
+            }
+
+            rem_ty = if x is Some(x) {
+              let fresh_x = self.declare_fresh(arg_ty)
+              free_vars_to_remove.push(fresh_x)
+              open(rest, 0, x, fresh_x)
+            } else {
+              rest
+            }
+          } else {
+            raise TypeError(ty, "Constructor '\{name}' has non-type parameter '\{arg_ty}'")
+          }
+
+          arg_idx += 1
+        }
+
+        // 5. The end of the constructor's telescope must be a valid application of arguments to the type being declared.
+        let is_valid = match rem_ty {
+          Ref(ref_name) if ref_name == inductive_name => true
+          App(_) => {
+            // rem_ty should be of the form `I p1...pm, i1 ..in` (I applied to the parameters and indices)
+            let (head, args) = rem_ty.collect_app_args()
+            let mut is_valid = true
+
+            if head is Ref(ref_name) && ref_name == inductive_name {
+              if args.length() < params.length() {
+                is_valid = false
+              } else {
+                // check parameters
+                for param, arg in params.zip_to_iter2(args) {
+                  let arg_ty = self.infer(arg)
+                  if !self.is_definitionally_equal(param.1, arg_ty) {
+                    is_valid = false
+                    break
+                  }
+                }
+
+                if is_valid {
+                  // check indices
+                  let indices = arity_tys[:arity_tys.length() - 1] // all but the resulting sort
+                  if indices.length() != args.length() - params.length() {
+                    is_valid = false
+                  } else {
+                    let mut i = params.length()
+
+                    for index in indices {
+                      let index_ty = self.infer(args[i])
+                      if !self.is_definitionally_equal(index, index_ty) {
+                        is_valid = false
+                        break
+                      }
+
+                      i += 1
+                    }
+                  }
+                }
+              }
+            } else {
+              is_valid = false
+            }
+            
+            is_valid
+          }
+          _ => false
+        }
+
+        if !is_valid {
+          raise TypeError(ty, "Constructor '\{name}' has invalid resulting type '\{rem_ty}', expected an application of the inductive type being declared to its parameters")
+        }
+      } else {
+        raise TypeError(ty, "Constructor '\{name}' refers to unknown inductive type '\{inductive_name}'")
+      }
+    }
+  }
 }
 
-fn Context::fresh_var_id(self: Context) -> FreeVarId {
+fn Context::is_strictly_positive(self: Context, ty: Term, inductive_type_name: Name) -> Bool raise TypeCheckError {
+  let ind: Term = Ref(inductive_type_name)
+
+  // non-recursive cas e
+  if !ind.occurs_in(ty) {
+    return true
+  }
+
+  match ty {
+    Ref(_) => true // `I`: simple case
+    App(_) => { // `I t1, ..., tn` simple case, where I does not occur in ti for any i
+      let (_head, args) = ty.collect_app_args()
+      return !args.iter().any(arg => ind.occurs_in(arg))
+    }
+    Pi(_, a, b) => { // functional case
+      !ind.occurs_in(a) && self.is_strictly_positive(b, inductive_type_name)
+    }
+    _ => true
+  }
+}
+
+test "is_strictly_positive" {
+  let ctx = Context::new()
+  let ind = Leaf("Ind")
+  assert_true(ctx.is_strictly_positive(Pi(None, Bool, Bool), ind))
+  assert_true(ctx.is_strictly_positive(Pi(None, Bool, Ref(ind)), ind))
+  assert_false(ctx.is_strictly_positive(Pi(None, Ref(ind), Ref(ind)), ind))
+}
+
+fn Context::fresh_var_id(self: Context) -> FreeVarId raise TypeCheckError {
   let id = self.next_free_var_id
+  if id == @uint.max_value {
+    raise FreeVarIdOverflow
+  }
+
   self.next_free_var_id += 1
   id
 }
-
-fn Context::declare_fresh(self: Context, ty: Term) -> FreeVarId {
+fn Context::declare_fresh(self: Context, ty: Term) -> FreeVarId raise TypeCheckError {
   let var_id = self.fresh_var_id()
   self.free_vars[var_id] = ty
   var_id
@@ -48,7 +233,7 @@ fn Context::lookup_free_var(self: Context, var_id: FreeVarId) -> Term? {
   self.free_vars.get(var_id)
 }
 
-fn Context::normalise(self: Context, term: Term) -> Term {
+fn Context::normalise(self: Context, term: Term) -> Term raise TypeCheckError {
   match term {
     Ref(name) => {
       if self.env.decls.get(name) is Some(decl) {
@@ -57,6 +242,7 @@ fn Context::normalise(self: Context, term: Term) -> Term {
           // delta reduction: unfold definitions
           Definition(_, body) => self.normalise(body)
           Inductive(_) => term
+          Constructor(_) => term
         }
       } else {
         Ref(name)
@@ -134,6 +320,7 @@ pub fn Context::whnf(self: Context, term: Term) -> Term {
           // delta reduction
           Definition(_, body) => self.whnf(body)
           Inductive(_) => term
+          Constructor(_) => term
         }
       } else {
         Ref(name)
@@ -174,12 +361,20 @@ fn close(term: Term, var_id: FreeVarId, idx: DeBruijnIndex) -> Term {
 
 pub suberror TypeCheckError {
   TypeError(Term, String)
+  DuplicateDeclaration(Name)
+  FreeVarIdOverflow
 }
 
 pub impl Show for TypeCheckError with output(self: TypeCheckError, logger) -> Unit {
   match self {
     TypeError(term, message) => {
       logger.write_string("Type error when checking '\{term}': \{message}")
+    }
+    DuplicateDeclaration(name) => {
+      logger.write_string("Duplicate declaration: '\{name}' is already declared")
+    }
+    FreeVarIdOverflow => {
+      logger.write_string("Ran out of free variable IDs")
     }
   }
 }
@@ -195,18 +390,19 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
           Axiom(ty) => ty
           // we already checked that the environment is well-formed
           Definition(ty, _) => ty
-          Inductive(_) => term
+          Inductive(ty~, ..) => ty
+          Constructor(ty~, ..) => ty
         }
       } else {
         raise TypeError(term, "Unbound reference '\{name}'")
       }
     }
     BoundVar(_) => raise TypeError(term, "BoundVar")
-    FreeVar(name, var_id) => {
+    FreeVar(_, var_id) => {
       if self.lookup_free_var(var_id) is Some(t) {
         t
       } else {
-        raise TypeError(term, "Unbound variable '\{name}'")
+        raise TypeError(term, "Unbound variable '\{term}'")
       }
     }
     App(lhs, rhs) => {
@@ -291,7 +487,7 @@ pub fn Context::check(self: Context, term: Term, ty: Term) -> Unit raise TypeChe
 // TODO: this is currently very naive and normalises both terms fully before comparing them, which is very inefficient.
 // see https://rocq-prover.org/doc/V8.19.0/refman/language/core/conversion.html for how to do this more efficiently by interleaving reduction and comparison
 // and only reducing as much as needed to determine definitional equality
-pub fn Context::is_definitionally_equal(self: Context, term: Term, expected: Term) -> Bool {
+pub fn Context::is_definitionally_equal(self: Context, term: Term, expected: Term) -> Bool raise TypeCheckError {
   let t1_norm = self.normalise(term)
   let t2_norm = self.normalise(expected)
 
@@ -314,7 +510,7 @@ fn elab_term(term: String) -> (Context, Term) raise {
   let s_term = Parser::new(Lexer::new(term).tokenise()).parse_term()
   let elab = Elaborator::new()
   let term_elab = elab.elaborate_term(s_term)
-  (Context::from(elab), term_elab)
+  (Context::new(), term_elab)
 }
 
 test "normalisation" {
@@ -328,10 +524,9 @@ test "normalisation" {
 
   assert_nf("Type", "Type")
   assert_nf("Type 1", "Type 1")
-  assert_nf("x", "x")
   assert_nf("fun x: Bool => x", "fun x: Bool => x")
   assert_nf("(fun x: Bool => x) true", "true")
-  assert_nf("(fun T: Type => forall x: T, T) A", "A -> A")
+  assert_nf("(fun A: Type => ((fun T: Type => forall x: T, T) A)) Bool", "Bool -> Bool")
 
   // eta-conversion
   assert_nf("fun f: Bool -> Bool => fun x: Bool => f x", "fun f: Bool -> Bool => f")
@@ -362,11 +557,10 @@ test "type checking" {
 
   fn assert_type_err(term: String) -> Unit raise {
     let (ctx, term_elab) = elab_term(term)
+    let res = try? ctx.infer(term_elab)
 
-    try ({ let _ = ctx.infer(term_elab) }) catch {
-      _ => ()
-    } noraise {
-      _ => fail("Expected type error for '\{term}', but typing succeeded")
+    if res is Ok(ty) {
+      fail("Expected type error for '\{term}', but got type '\{ty}'")
     }
   }
 
@@ -397,9 +591,6 @@ test "type checking" {
   assert_type("fun A: Type 1 => A -> Bool", "forall A: Type 1, Type 1")
   assert_type("fun x: Type 1 => x", "forall x: Type 1, Type 1")
 
-  assert_type_err("(fun x: Bool => y) true")
-  assert_type_err("(fun x: Bool => x) y")
-  assert_type_err("fun x: Bool => x -> y")
   assert_type_err("((fun A: Type => A): Bool)")
   assert_type_err("(Type 7 : Type 5)")
   assert_type_err("(Type 7 : Prop)")

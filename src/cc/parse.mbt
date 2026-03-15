@@ -95,6 +95,7 @@ fn Lexer::parse_identifier(self: Lexer) -> String {
 priv enum LexerResult {
   Yay(Token)
   Grr(LexerError)
+  Next
   EOF
 }
 
@@ -132,6 +133,13 @@ fn Lexer::next(self: Lexer) -> LexerResult {
       self.advance()
       if self.consumes('>') {
         Yay(Arrow)
+      } else if self.consumes('-') {
+        // skip comment until end of line
+        while self.index < self.input.length() && self.peek() != '\n' {
+          self.advance()
+        }
+        
+        Next
       } else {
         Grr(UnexpectedChar(char~, index=self.index))
       }
@@ -197,6 +205,7 @@ pub fn Lexer::tokenise(self: Lexer) -> Array[Token] raise LexerError {
     match self.next() {
       Yay(token) => tokens.push(token)
       Grr(error) => raise error
+      Next => ()
       EOF => break
     }
   }
@@ -284,23 +293,17 @@ fn Parser::parse_top_level(self: Parser) -> TopLevel[STerm] raise ParserError {
 }
 
 fn Parser::parse_name(self: Parser) -> Name raise ParserError {
-  let parts = []
-
-  while self.peek_safe() is Some(Var(part)) {
-    self.advance()
-    parts.push(part)
-
-    if self.peek_safe() is Some(Dot) {
+  match self.peek_safe() {
+    Some(Var(name)) => {
       self.advance()
-    } else {
-      break
+      Name::Leaf(name)
     }
-  }
-
-  if Name::from(parts) is Some(name) {
-    name
-  } else {
-    raise Message("Expected name")
+    Some(Path(name)) => {
+      self.advance()
+      name
+    }
+    Some(tok) => raise UnexpectedToken(tok)
+    None => raise UnexpectedEOF
   }
 }
 
@@ -343,7 +346,7 @@ fn Parser::parse_inductive(self: Parser) -> TopLevel[STerm] raise ParserError {
     constructors.push((ctor_name, ctor_ty))
   }
 
-  Declaration(name, Inductive(params~, arity~, constructors~))
+  Declaration(name, Decl::inductive(params~, arity~, constructors~))
 }
 
 fn Parser::parse_command(self: Parser) -> TopLevel[STerm] raise ParserError {
@@ -555,12 +558,12 @@ test "parser" {
   
   expect_top_level(
     "inductive False : Prop",
-    Declaration(Leaf("False"), Inductive(params=[], arity=Sort(0), constructors=[]))
+    Declaration(Leaf("False"), Inductive(params=[], arity=Sort(0), constructors=[], ty=Sort(0)))
   )
 
   expect_top_level(
     "inductive True : Prop | intro : True",
-    Declaration(Leaf("True"), Inductive(params=[], arity=Sort(0), constructors=[("intro", Var("True"))]))
+    Declaration(Leaf("True"), Inductive(params=[], arity=Sort(0), constructors=[("intro", Var("True"))], ty=Sort(0)))
   )
 
   expect_top_level(
@@ -578,6 +581,7 @@ test "parser" {
           ("nil", App(App(Var("Vec"), Var("A")), Ref(Path(Leaf("Nat"), "zero")))),
           ("cons", Pi(None, Var("A"), Pi(Some("n"), Var("Nat"), Pi(None, App(App(Var("Vec"), Var("A")), Var("n")), App(App(Var("Vec"), Var("A")), App(Ref(Path(Leaf("Nat"), "succ")), Var("n"))))))),
         ],
+        ty=Pi(Some("A"), Sort(1), Pi(None, Var("Nat"), Sort(1))),
       ),
     )
   )

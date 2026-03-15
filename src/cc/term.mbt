@@ -68,6 +68,55 @@ fn Term::occurs_free(self: Term, var_id: FreeVarId) -> Bool {
   }
 }
 
+fn Term::occurs_in(self: Term, term: Term) -> Bool {
+  if self.alpha_eq(term) {
+    true
+  } else {
+    match term {
+      App(f, arg) => self.occurs_in(f) || self.occurs_in(arg) 
+      Lam(_, ty, body) => self.occurs_in(ty) || self.occurs_in(body)
+      Pi(_, a, b) => self.occurs_in(a) || self.occurs_in(b)
+      Let(_, val, body) => self.occurs_in(val) || self.occurs_in(body)
+      Ann(lhs, rhs) => self.occurs_in(lhs) || self.occurs_in(rhs)
+      Sort(_) | Bool | Const(_) | Ref(_) | BoundVar(_) | FreeVar(_) => false
+    }
+  }
+}
+
+test "occurs_in" {
+  assert_true(Term::Ref(Leaf("X")).occurs_in(Ref(Leaf("X"))))
+  assert_false(Term::Ref(Leaf("X")).occurs_in(Ref(Leaf("Y"))))
+  assert_true(FreeVar("x", 0).occurs_in(App(Ref(Leaf("F")), FreeVar("x", 0))))
+  assert_true(FreeVar("x", 0).occurs_in(App(App(Ref(Leaf("F")), FreeVar("x", 0)), Ref(Leaf("Y")))))
+  assert_true(FreeVar("x", 0).occurs_in(Pi(None, FreeVar("x", 0), FreeVar("x", 0))))
+}
+
+fn Term::collect_app_args(self: Term) -> (Term, Array[Term]) {
+  let mut func = self
+  let args: Array[Term] = []
+
+  while func is App(f, arg) {
+    args.push(arg)
+    func = f
+  }
+
+  (func, args.rev())
+}
+
+pub fn Term::collect_pi_types(self: Term) -> Array[Term] {
+  let mut ty = self
+  let types: Array[Term] = []
+
+  while ty is Pi(_, arg_ty, rest) {
+    types.push(arg_ty)
+    ty = rest
+  }
+
+  let sorted = types.rev()
+  sorted.push(ty)
+  sorted
+}
+
 pub impl Show for Const with output(self: Const, logger: &Logger) {
   logger.write_string(if self is Bool(true) { "true" } else { "false" })
 }
@@ -101,13 +150,13 @@ fn Term::fmt(self: Term, bindings~: Array[String], depth~: Int, logger: &Logger)
       rhs.parens(wrap=rhs_needs_parens, bindings~, depth~, logger)
     }
     Lam(x, ty, body) => {
-      bindings.push(x)
-      defer { let _ = bindings.unsafe_pop() }
       logger.write_string("fun ")
       logger.write_string(x)
       logger.write_string(": ")
       ty.fmt(bindings~, depth~, logger)
       logger.write_string(" => ")
+      bindings.push(x)
+      defer { let _ = bindings.unsafe_pop() }
       body.fmt(bindings~, depth=depth + 1, logger)
     }
     Pi(Some(x), a, b) => {
@@ -158,7 +207,8 @@ test "show term" {
   }
 
   fn assert_show_expr(expr: String) raise {
-    assert_eq("\{parse(expr)}", expr)
+    let parsed = parse(expr)
+    assert_eq("\{parsed}", expr, msg="Expected '\{parsed}' to show as '\{expr}'")
   }
 
   {
@@ -173,34 +223,28 @@ test "show term" {
   assert_show_expr("Type 27")
   assert_show_expr("Bool -> Bool")
   assert_show_expr("Type -> Bool")
-  assert_show_expr("(x: Bool)")
+  assert_show_expr("fun x: Bool => (x: Bool)")
   assert_show_expr("(Type: Type 1)")
   assert_show_expr("((Bool: Type 1): Type 2)")
-  assert_show_expr("A -> B -> A")
+  assert_show_expr("fun A: Type => fun B: Type => A -> B -> A")
   // `->` is right-associative
-  assert_true(parse("A -> (B -> C)").alpha_eq(parse("A -> B -> C")))
-  assert_show_expr("(A -> B) -> A")
+  assert_true(parse("fun A: Type => A -> (A -> A)").alpha_eq(parse("fun A: Type => A -> A -> A")))
   assert_show_expr("forall A: Prop, A -> A")
   assert_show_expr("forall A: Type 78, Bool")
-  assert_show_expr("forall A: Type, forall b: Bool, P A b")
+  assert_show_expr("forall A: Type, forall P: A -> Bool -> Prop, forall b: Bool, P A b")
   assert_show_expr("true")
   assert_show_expr("false")
   assert_show_expr("fun x: Bool => x")
   assert_show_expr("fun x: Bool => (x: Bool)")
-  assert_show_expr("fun x0: A => fun y0: B => fun z0: C => fun x1: D => fun y1: E => fun z2: F => y0")
-  assert_show_expr("fun a: A => fun b: B => fun c: C => c")
-  assert_show_expr("((fun x: A => x): A -> A)")
-  assert_show_expr("(((fun x: A => x): A -> A): Prop)")
-  assert_show_expr("f (g x)")
-  assert_show_expr("x y z")
-  assert_show_expr("let id := fun x: A => x in id")
+  assert_show_expr("fun A: Type => fun B: Type => fun C: Type => fun a: A => fun b: B => fun c: C => c")
+  assert_show_expr("fun A: Type => ((fun x: A => x): A -> A)")
+  assert_show_expr("fun A: Type => (((fun x: A => x): A -> A): Prop)")
+  assert_show_expr("fun A: Type => fun f: A -> A => fun g: A -> A => fun x: A => f (g x)")
+  assert_show_expr("let id := fun A: Type => fun x: A => x in id")
   assert_true(parse("Sort 0").alpha_eq(parse("Prop")))
   assert_true(parse("Sort 1").alpha_eq(parse("Type")))
   assert_true(parse("Sort 2").alpha_eq(parse("Type 1")))
   assert_true(parse("Sort 3").alpha_eq(parse("Type 2")))
   assert_true(parse("Type 0").alpha_eq(parse("Type")))
   assert_true(parse("Type 1").alpha_eq(parse("Type 1")))
-
-  // application is left-associative
-  assert_true(parse("(x y) z").alpha_eq(parse("x y z")))
 }
