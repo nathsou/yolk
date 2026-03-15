@@ -15,7 +15,7 @@ pub impl Show for ElaborationError with output(self: ElaborationError, logger: &
   }
 }
 
-pub fn Elaborator::new() -> Elaborator {
+pub fn Elaborator::new() -> Elaborator raise {
   {
     bound_vars: [],
     inductive_type_being_defined: None,
@@ -103,26 +103,17 @@ pub fn Elaborator::elaborate_decl(self: Elaborator, name: Name, decl: Decl[STerm
 pub fn Elaborator::elaborate_term(self: Elaborator, term: STerm) -> Term raise {
   match term {
     Sort(u) => Sort(u)
-    Bool => Bool
-    Const(c) => Const(c)
-    Var(v) => {
+    Var(name) => {
       for i = self.bound_vars.length() - 1; i >= 0; i = i - 1 {
-        if self.bound_vars[i] == v {
+        if name == Leaf(self.bound_vars[i]) {
           return BoundVar((self.bound_vars.length() - 1 - i).reinterpret_as_uint())
         }
       }
 
-      if self.ctx.env.decls.contains(Leaf(v)) || (self.inductive_type_being_defined is Some(Leaf(ind)) && ind == v) {
-        Ref(Leaf(v))
+      if self.ctx.env.decls.contains(name) || (self.inductive_type_being_defined is Some(ind) && name == ind) {
+        Const(name)
       } else {
-        raise ElaborationError::Message("Undefined variable: '\{v}'")
-      }
-    }
-    Ref(name) => {
-      if self.ctx.env.decls.contains(name) {
-        Ref(name)
-      } else {
-        raise ElaborationError::Message("Undefined reference: \{name}")
+        raise ElaborationError::Message("Undefined variable: '\{name}'")
       }
     }
     App(lhs, rhs) => {

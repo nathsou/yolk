@@ -2,7 +2,7 @@
 pub enum Token {
   Lparen; Rparen; ThickArrow; Arrow; Colon; Comma; Dot; Hash; Pipe
   Sort; Prop; Type; Fun; Forall; Let; In; ColonEqual; Def; Axiom; Inductive
-  True; False; Nat(UInt); Var(String); Path(Name); Bool
+  Nat(UInt); Var(String); Path(Name)
 } derive(Show, Eq)
 
 pub suberror LexerError {
@@ -158,9 +158,6 @@ fn Lexer::next(self: Lexer) -> LexerResult {
           "in" => Yay(In)
           "def" => Yay(Def)
           "inductive" => Yay(Inductive)
-          "true" => Yay(True)
-          "false" => Yay(False)
-          "Bool" => Yay(Bool)
           "Sort" => Yay(Sort)
           "Prop" => Yay(Prop)
           "Type" => Yay(Type)
@@ -436,13 +433,12 @@ fn Parser::parse_atom(self: Parser) -> STerm raise ParserError {
   match self.peek() {
     Var(x) => {
       self.advance();
-      Var(x)
+      Var(Leaf(x))
     }
     Path(name) => {
       self.advance();
-      Ref(name)
+      Var(name)
     }
-    Bool => { self.advance(); Bool }
     Prop => { self.advance(); Sort(0) }
     (Sort | Type) as tok => {
       self.advance()
@@ -461,8 +457,6 @@ fn Parser::parse_atom(self: Parser) -> STerm raise ParserError {
         }
       }
     }
-    True => { self.advance(); Const(Bool(true)) }
-    False => { self.advance(); Const(Bool(false)) }
     Lparen => {
       self.advance()
       let lhs = self.parse_term()
@@ -518,43 +512,47 @@ test "parser" {
     }
   }
 
+  fn v(name: String) -> STerm {
+    Var(Leaf(name))
+  }
+
   expect_term("Type", Sort(1))
   expect_term("Type 0", Sort(1))
   expect_term("Prop", Sort(0))
   expect_term("Type 1", Sort(2))
   expect_term("Type 321", Sort(322))
   expect_term("Sort 321", Sort(321))
-  expect_term("Bool", Bool)
-  expect_term("Bool -> Bool", Pi(None, Bool, Bool))
-  expect_term("Bool -> Bool -> Bool", Pi(None, Bool, Pi(None, Bool, Bool)))
-  expect_term("A", Var("A"))
-  expect_term("P", Var("P"))
-  expect_term("Q71", Var("Q71"))
-  expect_term("P -> Q -> (P -> Bool -> R)",  Pi(None, Var("P"), Pi(None, Var("Q"), Pi(None, Var("P"), Pi(None, Bool, Var("R"))))))
-  expect_term("true", Const(Bool(true)))
-  expect_term("false", Const(Bool(false)))
-  expect_term("x", Var("x"))
-  expect_term("(true: Bool)", Ann(Const(Bool(true)), Bool))
-  expect_term("fun x: Bool => x", Fun("x", Bool, Var("x")))
-  expect_term("fun x: Bool => y", Fun("x", Bool, Var("y")))
-  expect_term("fun x: A => x", Fun("x", Var("A"), Var("x")))
-  expect_term("fun x: A => (x: A)", Fun("x", Var("A"), Ann(Var("x"), Var("A"))))
-  expect_term("fun x: A => fun y: B => x", Fun("x", Var("A"), Fun("y", Var("B"), Var("x"))))
-  expect_term("f x", App(Var("f"), Var("x")))
-  expect_term("(fun x: Bool => x) true", App(Fun("x", Bool, Var("x")), Const(Bool(true))))
-  expect_term("(fun f: (Bool -> Bool) => f true) (fun x: Bool => x)", App(Fun("f", Pi(None, Bool, Bool), App(Var("f"), Const(Bool(true)))), Fun("x", Bool, Var("x"))))
-  expect_term("forall A: Type, A", Pi(Some("A"), Sort(1), Var("A")))
-  expect_term("forall b: Bool, b", Pi(Some("b"), Bool, Var("b")))
-  expect_term("fun T: Type 2 => forall x: T, T", Fun("T", Sort(3), Pi(Some("x"), Var("T"), Var("T"))))
-  expect_term("let id := fun x: A => x in id", Let("id", Fun("x", Var("A"), Var("x")), Var("id")))
+  expect_term("Bool", v("Bool"))
+  expect_term("Bool -> Bool", Pi(None, v("Bool"), v("Bool")))
+  expect_term("Bool -> Bool -> Bool", Pi(None, v("Bool"), Pi(None, v("Bool"), v("Bool"))))
+  expect_term("A", v("A"))
+  expect_term("P", v("P"))
+  expect_term("Q71", v("Q71"))
+  expect_term("P -> Q -> (P -> Bool -> R)",  Pi(None, v("P"), Pi(None, v("Q"), Pi(None, v("P"), Pi(None, v("Bool"), v("R"))))))
+  expect_term("true", v("true"))
+  expect_term("false", v("false"))
+  expect_term("x", v("x"))
+  expect_term("(true: Bool)", Ann(v("true"), v("Bool")))
+  expect_term("fun x: Bool => x", Fun("x", v("Bool"), v("x")))
+  expect_term("fun x: Bool => y", Fun("x", v("Bool"), v("y")))
+  expect_term("fun x: A => x", Fun("x", v("A"), v("x")))
+  expect_term("fun x: A => (x: A)", Fun("x", v("A"), Ann(v("x"), v("A"))))
+  expect_term("fun x: A => fun y: B => x", Fun("x", v("A"), Fun("y", v("B"), v("x"))))
+  expect_term("f x", App(v("f"), v("x")))
+  expect_term("(fun x: Bool => x) true", App(Fun("x", v("Bool"), v("x")), v("true")))
+  expect_term("(fun f: (Bool -> Bool) => f true) (fun x: Bool => x)", App(Fun("f", Pi(None, v("Bool"), v("Bool")), App(v("f"), v("true"))), Fun("x", v("Bool"), v("x"))))
+  expect_term("forall A: Type, A", Pi(Some("A"), Sort(1), v("A")))
+  expect_term("forall b: Bool, b", Pi(Some("b"), v("Bool"), v("b")))
+  expect_term("fun T: Type 2 => forall x: T, T", Fun("T", Sort(3), Pi(Some("x"), v("T"), v("T"))))
+  expect_term("let id := fun x: A => x in id", Let("id", Fun("x", v("A"), v("x")), v("id")))
   expect_term_err("fun x => x)", Expected(expected=Colon, received=ThickArrow))
   
   expect_top_level(
     "def id : forall A: Type, A := fun A: Type => fun x: A => x",
-    Declaration(Leaf("id"), Definition(Pi(Some("A"), Sort(1), Var("A")), Fun("A", Sort(1), Fun("x", Var("A"), Var("x")))))
+    Declaration(Leaf("id"), Definition(Pi(Some("A"), Sort(1), v("A")), Fun("A", Sort(1), Fun("x", v("A"), v("x")))))
   )
 
-  expect_top_level("#eval (fun x: Bool => x) true", Command("eval", [App(Fun("x", Bool, Var("x")), Const(Bool(true)))]))
+  expect_top_level("#eval (fun x: Bool => x) true", Command("eval", [App(Fun("x", v("Bool"), v("x")), v("true"))]))
   
   expect_top_level(
     "inductive False : Prop",
@@ -563,7 +561,7 @@ test "parser" {
 
   expect_top_level(
     "inductive True : Prop | intro : True",
-    Declaration(Leaf("True"), Inductive(params=[], arity=Sort(0), constructors=[("intro", Var("True"))], ty=Sort(0)))
+    Declaration(Leaf("True"), Inductive(params=[], arity=Sort(0), constructors=[("intro", v("True"))], ty=Sort(0)))
   )
 
   expect_top_level(
@@ -576,12 +574,12 @@ test "parser" {
       Leaf("Vec"),
       Inductive(
         params=[("A", Sort(1))],
-        arity=Pi(None, Var("Nat"), Sort(1)),
+        arity=Pi(None, v("Nat"), Sort(1)),
         constructors=[
-          ("nil", App(App(Var("Vec"), Var("A")), Ref(Path(Leaf("Nat"), "zero")))),
-          ("cons", Pi(None, Var("A"), Pi(Some("n"), Var("Nat"), Pi(None, App(App(Var("Vec"), Var("A")), Var("n")), App(App(Var("Vec"), Var("A")), App(Ref(Path(Leaf("Nat"), "succ")), Var("n"))))))),
+          ("nil", App(App(v("Vec"), v("A")), Var(Path(Leaf("Nat"), "zero")))),
+          ("cons", Pi(None, v("A"), Pi(Some("n"), v("Nat"), Pi(None, App(App(v("Vec"), v("A")), v("n")), App(App(v("Vec"), v("A")), App(Var(Path(Leaf("Nat"), "succ")), v("n"))))))),
         ],
-        ty=Pi(Some("A"), Sort(1), Pi(None, Var("Nat"), Sort(1))),
+        ty=Pi(Some("A"), Sort(1), Pi(None, v("Nat"), Sort(1))),
       ),
     )
   )

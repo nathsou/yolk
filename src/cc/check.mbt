@@ -3,8 +3,50 @@ struct GlobalEnv {
   decls: Map[Name, Decl[Term]]
 }
 
-fn GlobalEnv::new() -> GlobalEnv {
-  { decls: {} }
+fn GlobalEnv::default() -> GlobalEnv raise {
+  let env: GlobalEnv = { decls: {} }
+  
+  env.add(Leaf("Bool"), Inductive(
+    params=[],
+    arity=Sort(1),
+    constructors=[
+      ("true", Const(Leaf("Bool"))),
+      ("false", Const(Leaf("Bool"))),
+    ],
+    ty=Sort(1),
+  ))
+
+  env.add(Leaf("true"), Constructor(
+    inductive_name=Leaf("Bool"),
+    ty=Const(Leaf("Bool")),
+  ))
+
+  env.add(Leaf("false"), Constructor(
+    inductive_name=Leaf("Bool"),
+    ty=Const(Leaf("Bool")),
+  ))
+  
+  env.add(Leaf("Nat"), Inductive(
+    params=[],
+    arity=Sort(1),
+    constructors=[
+      ("zero", Const(Leaf("Nat"))),
+      ("succ", Pi(None, Const(Leaf("Nat")), Const(Leaf("Nat")))),
+    ],
+    ty=Sort(1),
+  ))
+
+  env.add(Path(Leaf("Nat"), "zero"), Constructor(
+    inductive_name=Leaf("Nat"),
+    ty=Const(Leaf("Nat")),
+  ))
+
+  env.add(Path(Leaf("Nat"), "succ"), Constructor(
+    inductive_name=Leaf("Nat"),
+    ty=Pi(None, Const(Leaf("Nat")), Const(Leaf("Nat"))),
+  ))
+
+  env
 }
 
 fn GlobalEnv::add(self: GlobalEnv, name: Name, decl: Decl[Term]) -> Unit raise TypeCheckError {
@@ -21,9 +63,9 @@ struct Context {
   env: GlobalEnv
 }
 
-pub fn Context::new() -> Context {
+pub fn Context::new() -> Context raise {
   {
-    env: GlobalEnv::new(),
+    env: GlobalEnv::default(),
     next_free_var_id: 0,
     free_vars: {},
   }
@@ -54,6 +96,7 @@ fn Context::check_decl(self: Context, name: Name, decl: Decl[Term]) -> Unit rais
     Inductive(ty~, ..) => {
       let _ = ensure_sort("inductive type", ty)
     }
+    // https://lean-lang.org/doc/reference/latest/The-Type-System/Inductive-Types/#well-formed-inductives  
     // https://ammkrn.github.io/type_checking_in_lean4/declarations/inductive.html#constructor
     Constructor(inductive_name~, ty~) => {
       if self.env.decls.get(inductive_name) is Some(Inductive(params~, arity~, ..)) {
@@ -127,13 +170,13 @@ fn Context::check_decl(self: Context, name: Name, decl: Decl[Term]) -> Unit rais
 
         // 5. The end of the constructor's telescope must be a valid application of arguments to the type being declared.
         let is_valid = match rem_ty {
-          Ref(ref_name) if ref_name == inductive_name => true
+          Const(ref_name) if ref_name == inductive_name => true
           App(_) => {
             // rem_ty should be of the form `I p1...pm, i1 ..in` (I applied to the parameters and indices)
             let (head, args) = rem_ty.collect_app_args()
             let mut is_valid = true
 
-            if head is Ref(ref_name) && ref_name == inductive_name {
+            if head is Const(ref_name) && ref_name == inductive_name {
               if args.length() < params.length() {
                 is_valid = false
               } else {
@@ -186,7 +229,7 @@ fn Context::check_decl(self: Context, name: Name, decl: Decl[Term]) -> Unit rais
 }
 
 fn Context::is_strictly_positive(self: Context, ty: Term, inductive_type_name: Name) -> Bool raise TypeCheckError {
-  let ind: Term = Ref(inductive_type_name)
+  let ind: Term = Const(inductive_type_name)
 
   // non-recursive cas e
   if !ind.occurs_in(ty) {
@@ -194,7 +237,7 @@ fn Context::is_strictly_positive(self: Context, ty: Term, inductive_type_name: N
   }
 
   match ty {
-    Ref(_) => true // `I`: simple case
+    Const(_) => true // `I`: simple case
     App(_) => { // `I t1, ..., tn` simple case, where I does not occur in ti for any i
       let (_head, args) = ty.collect_app_args()
       return !args.iter().any(arg => ind.occurs_in(arg))
@@ -210,8 +253,8 @@ test "is_strictly_positive" {
   let ctx = Context::new()
   let ind = Leaf("Ind")
   assert_true(ctx.is_strictly_positive(Pi(None, Bool, Bool), ind))
-  assert_true(ctx.is_strictly_positive(Pi(None, Bool, Ref(ind)), ind))
-  assert_false(ctx.is_strictly_positive(Pi(None, Ref(ind), Ref(ind)), ind))
+  assert_true(ctx.is_strictly_positive(Pi(None, Bool, Const(ind)), ind))
+  assert_false(ctx.is_strictly_positive(Pi(None, Const(ind), Const(ind)), ind))
 }
 
 fn Context::fresh_var_id(self: Context) -> FreeVarId raise TypeCheckError {
@@ -235,7 +278,7 @@ fn Context::lookup_free_var(self: Context, var_id: FreeVarId) -> Term? {
 
 fn Context::normalise(self: Context, term: Term) -> Term raise TypeCheckError {
   match term {
-    Ref(name) => {
+    Const(name) => {
       if self.env.decls.get(name) is Some(decl) {
         match decl {
           Axiom(_) => term
@@ -245,7 +288,7 @@ fn Context::normalise(self: Context, term: Term) -> Term raise TypeCheckError {
           Constructor(_) => term
         }
       } else {
-        Ref(name)
+        Const(name)
       }
     }
     App(lhs, rhs) => {
@@ -294,7 +337,7 @@ fn Context::normalise(self: Context, term: Term) -> Term raise TypeCheckError {
     }
     Let(_, val, body) => self.normalise(instantiate(body, 0, self.normalise(val)))
     Ann(lhs, _) => self.normalise(lhs)
-    Sort(_) | Bool | Const(_) | BoundVar(_) | FreeVar(_) => term
+    Sort(_) | Bool | BoundVar(_) | FreeVar(_) => term
   }
 }
 
@@ -313,7 +356,7 @@ pub fn Context::whnf(self: Context, term: Term) -> Term {
       // zeta reduction
       self.whnf(instantiate(body, 0, val))
     }
-    Ref(name) => {
+    Const(name) => {
       if self.env.decls.get(name) is Some(decl) {
         match decl {
           Axiom(_) => term
@@ -323,11 +366,11 @@ pub fn Context::whnf(self: Context, term: Term) -> Term {
           Constructor(_) => term
         }
       } else {
-        Ref(name)
+        Const(name)
       }
     }
     Ann(lhs, _) => self.whnf(lhs)
-    Lam(_) | Pi(_) | Sort(_) | Bool | Const(_) | BoundVar(_) | FreeVar(_) => term
+    Lam(_) | Pi(_) | Sort(_) | Bool | BoundVar(_) | FreeVar(_) => term
   }
 }
 
@@ -339,7 +382,7 @@ fn instantiate(term: Term, idx: DeBruijnIndex, s: Term) -> Term {
     App(f, arg) => App(instantiate(f, idx, s), instantiate(arg, idx, s))
     Let(x, val, body) => Let(x, instantiate(val, idx, s), instantiate(body, idx + 1, s))
     Ann(lhs, rhs) => Ann(instantiate(lhs, idx, s), instantiate(rhs, idx, s))
-    Sort(_) | Bool | Const(_) | Ref(_) | BoundVar(_) | FreeVar(_) => term
+    Sort(_) | Bool | Const(_) | BoundVar(_) | FreeVar(_) => term
   }
 }
 
@@ -355,7 +398,7 @@ fn close(term: Term, var_id: FreeVarId, idx: DeBruijnIndex) -> Term {
     App(f, arg) => App(close(f, var_id, idx), close(arg, var_id, idx))
     Let(x, val, body) => Let(x, close(val, var_id, idx), close(body, var_id, idx + 1))
     Ann(lhs, rhs) => Ann(close(lhs, var_id, idx), close(rhs, var_id, idx))
-    Sort(_) | Bool | Const(_) | Ref(_) | BoundVar(_) | FreeVar(_) => term
+    Sort(_) | Bool | Const(_) | BoundVar(_) | FreeVar(_) => term
   }
 }
 
@@ -383,8 +426,7 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
   match term {
     Sort(u) => Sort(u + 1) // Prop : Type 0, Type u : Type (u + 1)
     Bool => Sort(1) // Type 0
-    Const(c) => match c { Bool(_) => Bool }
-    Ref(name) => {
+    Const(name) => {
       if self.env.decls.get(name) is Some(decl) {
         match decl {
           Axiom(ty) => ty
