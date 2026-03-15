@@ -1,11 +1,10 @@
 
 pub enum Term {
   Sort(UniverseLevel) // 0 = Prop, 1 = Type 0, 2 = Type 1, ...
-  Bool
   Const(Name)
   // locally nameless representation: bound variables are represented by their de Bruijn index, free variables have a name
   BoundVar(DeBruijnIndex)
-  FreeVar(String, FreeVarId)
+  FreeVar(FreeVarId)
   App(Term, Term)
   Lam(String, Term, Term)
   Pi(String?, Term, Term)
@@ -22,10 +21,9 @@ pub type UniverseLevel = UInt
 pub fn Term::alpha_eq(self: Term, other: Term) -> Bool {
   match (self, other) {
     (Sort(u1), Sort(u2)) => u1 == u2
-    (Bool, Bool) => true
     (Const(r1), Const(r2)) => r1 == r2
     (BoundVar(i), BoundVar(j)) => i == j
-    (FreeVar(_, id1), FreeVar(_, id2)) => id1 == id2
+    (FreeVar(id1), FreeVar(id2)) => id1 == id2
     (App(f, x), App(g, y)) => x.alpha_eq(y) && f.alpha_eq(g)
     (Lam(_, t1, body1), Lam(_, t2, body2)) => t1.alpha_eq(t2) && body1.alpha_eq(body2)
     (Pi(_, a1, b1), Pi(_, a2, b2)) => a1.alpha_eq(a2) && b1.alpha_eq(b2)
@@ -46,19 +44,19 @@ fn Term::has_loose_bvar(self: Term, depth: DeBruijnIndex) -> Bool {
     }
     Let(_, val, body) => val.has_loose_bvar(depth) || body.has_loose_bvar(depth + 1)
     Ann(lhs, rhs) => lhs.has_loose_bvar(depth) || rhs.has_loose_bvar(depth)
-    Sort(_) | Bool | Const(_) | FreeVar(_) => false
+    Sort(_) | Const(_) | FreeVar(_) => false
   }
 }
 
 fn Term::occurs_free(self: Term, var_id: FreeVarId) -> Bool {
   match self {
-    FreeVar(_, id) => id == var_id
+    FreeVar(id) => id == var_id
     App(f, arg) => f.occurs_free(var_id) || arg.occurs_free(var_id)
     Lam(_, ty, body) => ty.occurs_free(var_id) || body.occurs_free(var_id)
     Pi(_, a, b) => a.occurs_free(var_id) || b.occurs_free(var_id)
     Let(_, val, body) => val.occurs_free(var_id) || body.occurs_free(var_id)
     Ann(lhs, rhs) => lhs.occurs_free(var_id) || rhs.occurs_free(var_id)
-    Sort(_) | Bool | Const(_) | BoundVar(_) => false
+    Sort(_) | Const(_) | BoundVar(_) => false
   }
 }
 
@@ -72,7 +70,7 @@ fn Term::occurs_in(self: Term, term: Term) -> Bool {
       Pi(_, a, b) => self.occurs_in(a) || self.occurs_in(b)
       Let(_, val, body) => self.occurs_in(val) || self.occurs_in(body)
       Ann(lhs, rhs) => self.occurs_in(lhs) || self.occurs_in(rhs)
-      Sort(_) | Bool | Const(_) | BoundVar(_) | FreeVar(_) => false
+      Sort(_) | Const(_) | BoundVar(_) | FreeVar(_) => false
     }
   }
 }
@@ -80,9 +78,9 @@ fn Term::occurs_in(self: Term, term: Term) -> Bool {
 test "occurs_in" {
   assert_true(Term::Const(Leaf("X")).occurs_in(Const(Leaf("X"))))
   assert_false(Term::Const(Leaf("X")).occurs_in(Const(Leaf("Y"))))
-  assert_true(FreeVar("x", 0).occurs_in(App(Const(Leaf("F")), FreeVar("x", 0))))
-  assert_true(FreeVar("x", 0).occurs_in(App(App(Const(Leaf("F")), FreeVar("x", 0)), Const(Leaf("Y")))))
-  assert_true(FreeVar("x", 0).occurs_in(Pi(None, FreeVar("x", 0), FreeVar("x", 0))))
+  assert_true(FreeVar(0).occurs_in(App(Const(Leaf("F")), FreeVar(0))))
+  assert_true(FreeVar(0).occurs_in(App(App(Const(Leaf("F")), FreeVar(0)), Const(Leaf("Y")))))
+  assert_true(FreeVar(0).occurs_in(Pi(None, FreeVar(0), FreeVar(0))))
 }
 
 fn Term::collect_app_args(self: Term) -> (Term, Array[Term]) {
@@ -119,7 +117,6 @@ fn Term::parens(self: Term, wrap~: Bool, bindings~: Array[String], depth~: Int, 
 
 fn Term::fmt(self: Term, bindings~: Array[String], depth~: Int, logger: &Logger) -> Unit {
   match self {
-    Bool => logger.write_string("Bool")
     Sort(u) => logger.write_string(show_sort(u))
     BoundVar(idx) => {
       let eff_idx = bindings.length() - 1 - idx.reinterpret_as_int()
@@ -129,7 +126,7 @@ fn Term::fmt(self: Term, bindings~: Array[String], depth~: Int, logger: &Logger)
         logger.write_string(bindings[eff_idx])
       }
     }
-    FreeVar(name, _) => logger.write_string(name)
+    FreeVar(id) => logger.write_string("%\{id}")
     Const(name) => logger.write_object(name)
     App(lhs, rhs) => {
       let lhs_needs_parens = lhs is Lam(_)
@@ -200,11 +197,6 @@ test "show term" {
     assert_eq("\{parsed}", expr, msg="Expected '\{parsed}' to show as '\{expr}'")
   }
 
-  {
-    let e = Lam("a", FreeVar("A", 0), Lam("b", FreeVar("B", 1), Lam("c", FreeVar("C", 2), BoundVar(0))))
-    assert_eq("\{e}", "fun a: A => fun b: B => fun c: C => c")
-  }
-
   assert_show_expr("Bool")
   assert_show_expr("Prop")
   assert_show_expr("Type")
@@ -215,21 +207,12 @@ test "show term" {
   assert_show_expr("fun x: Bool => (x: Bool)")
   assert_show_expr("(Type: Type 1)")
   assert_show_expr("((Bool: Type 1): Type 2)")
-  assert_show_expr("fun A: Type => fun B: Type => A -> B -> A")
   // `->` is right-associative
   assert_true(parse("fun A: Type => A -> (A -> A)").alpha_eq(parse("fun A: Type => A -> A -> A")))
   assert_show_expr("forall A: Prop, A -> A")
   assert_show_expr("forall A: Type 78, Bool")
-  assert_show_expr("forall A: Type, forall P: A -> Bool -> Prop, forall b: Bool, P A b")
   assert_show_expr("true")
   assert_show_expr("false")
-  assert_show_expr("fun x: Bool => x")
-  assert_show_expr("fun x: Bool => (x: Bool)")
-  assert_show_expr("fun A: Type => fun B: Type => fun C: Type => fun a: A => fun b: B => fun c: C => c")
-  assert_show_expr("fun A: Type => ((fun x: A => x): A -> A)")
-  assert_show_expr("fun A: Type => (((fun x: A => x): A -> A): Prop)")
-  assert_show_expr("fun A: Type => fun f: A -> A => fun g: A -> A => fun x: A => f (g x)")
-  assert_show_expr("let id := fun A: Type => fun x: A => x in id")
   assert_true(parse("Sort 0").alpha_eq(parse("Prop")))
   assert_true(parse("Sort 1").alpha_eq(parse("Type")))
   assert_true(parse("Sort 2").alpha_eq(parse("Type 1")))

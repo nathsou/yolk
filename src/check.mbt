@@ -125,10 +125,10 @@ fn Context::check_decl(self: Context, name: Name, decl: Decl[Term]) -> Unit rais
                 raise TypeError(ty, "Constructor '\{name}' parameter type '\{a}' does not match inductive type '\{inductive_name}' parameter type '\{param_ty}'")
               }
               
-              rem_ty = if x is Some(x) {
+              rem_ty = if x is Some(_) {
                 let fresh_x = self.declare_fresh(param_ty)
                 free_vars_to_remove.push(fresh_x)
-                open(b, 0, x, fresh_x)
+                open(b, 0, fresh_x)
               } else {
                 b
               }
@@ -136,7 +136,6 @@ fn Context::check_decl(self: Context, name: Name, decl: Decl[Term]) -> Unit rais
             _ => raise TypeError(ty, "Constructor '\{name}' has too few parameters compared to inductive type '\{inductive_name}'")
           }
         }
-        
 
         let mut arg_idx = 0
         // 2. For the non-parameter elements of the constructor type's telescope, the binder type must actually be a type (must infer as Sort _).
@@ -154,10 +153,10 @@ fn Context::check_decl(self: Context, name: Name, decl: Decl[Term]) -> Unit rais
               raise TypeError(ty, "Constructor '\{name}' has a non strictly-positive occurrence of the inductive type being declared in argument #\{arg_idx + 1}")
             }
 
-            rem_ty = if x is Some(x) {
+            rem_ty = if x is Some(_) {
               let fresh_x = self.declare_fresh(arg_ty)
               free_vars_to_remove.push(fresh_x)
-              open(rest, 0, x, fresh_x)
+              open(rest, 0, fresh_x)
             } else {
               rest
             }
@@ -229,9 +228,9 @@ fn Context::check_decl(self: Context, name: Name, decl: Decl[Term]) -> Unit rais
 }
 
 fn Context::is_strictly_positive(self: Context, ty: Term, inductive_type_name: Name) -> Bool raise TypeCheckError {
-  let ind: Term = Const(inductive_type_name)
+  let ind = Const(inductive_type_name)
 
-  // non-recursive cas e
+  // non-recursive case
   if !ind.occurs_in(ty) {
     return true
   }
@@ -252,8 +251,9 @@ fn Context::is_strictly_positive(self: Context, ty: Term, inductive_type_name: N
 test "is_strictly_positive" {
   let ctx = Context::new()
   let ind = Leaf("Ind")
-  assert_true(ctx.is_strictly_positive(Pi(None, Bool, Bool), ind))
-  assert_true(ctx.is_strictly_positive(Pi(None, Bool, Const(ind)), ind))
+  let bool = Const(Leaf("Bool"))
+  assert_true(ctx.is_strictly_positive(Pi(None, bool, bool), ind))
+  assert_true(ctx.is_strictly_positive(Pi(None, bool, Const(ind)), ind))
   assert_false(ctx.is_strictly_positive(Pi(None, Const(ind), Const(ind)), ind))
 }
 
@@ -266,6 +266,7 @@ fn Context::fresh_var_id(self: Context) -> FreeVarId raise TypeCheckError {
   self.next_free_var_id += 1
   id
 }
+
 fn Context::declare_fresh(self: Context, ty: Term) -> FreeVarId raise TypeCheckError {
   let var_id = self.fresh_var_id()
   self.free_vars[var_id] = ty
@@ -306,7 +307,7 @@ fn Context::normalise(self: Context, term: Term) -> Term raise TypeCheckError {
       defer self.free_vars.remove(fresh_x)
 
       // 2. Open the binder, replacing BoundVar(0) with the FreeVar
-      let opened = open(body, 0, x, fresh_x)
+      let opened = open(body, 0, fresh_x)
 
       // 3. Normalise the locally closed body
       let norm_body = self.normalise(opened)
@@ -323,11 +324,11 @@ fn Context::normalise(self: Context, term: Term) -> Term raise TypeCheckError {
     }
     Pi(x, a, b) => {
       let a_norm = self.normalise(a)
-      let b_norm = if x is Some(name) {
+      let b_norm = if x is Some(_) {
         let fresh_x = self.declare_fresh(a)
         defer self.free_vars.remove(fresh_x)
 
-        let opened = open(b, 0, name, fresh_x)
+        let opened = open(b, 0, fresh_x)
         close(self.normalise(opened), fresh_x, 0)
       } else {
         self.normalise(b)
@@ -337,7 +338,7 @@ fn Context::normalise(self: Context, term: Term) -> Term raise TypeCheckError {
     }
     Let(_, val, body) => self.normalise(instantiate(body, 0, self.normalise(val)))
     Ann(lhs, _) => self.normalise(lhs)
-    Sort(_) | Bool | BoundVar(_) | FreeVar(_) => term
+    Sort(_) | BoundVar(_) | FreeVar(_) => term
   }
 }
 
@@ -370,7 +371,7 @@ pub fn Context::whnf(self: Context, term: Term) -> Term {
       }
     }
     Ann(lhs, _) => self.whnf(lhs)
-    Lam(_) | Pi(_) | Sort(_) | Bool | BoundVar(_) | FreeVar(_) => term
+    Lam(_) | Pi(_) | Sort(_) | BoundVar(_) | FreeVar(_) => term
   }
 }
 
@@ -382,23 +383,23 @@ fn instantiate(term: Term, idx: DeBruijnIndex, s: Term) -> Term {
     App(f, arg) => App(instantiate(f, idx, s), instantiate(arg, idx, s))
     Let(x, val, body) => Let(x, instantiate(val, idx, s), instantiate(body, idx + 1, s))
     Ann(lhs, rhs) => Ann(instantiate(lhs, idx, s), instantiate(rhs, idx, s))
-    Sort(_) | Bool | Const(_) | BoundVar(_) | FreeVar(_) => term
+    Sort(_) | Const(_) | BoundVar(_) | FreeVar(_) => term
   }
 }
 
-fn open(term: Term, idx: DeBruijnIndex, name: String, var_id: FreeVarId) -> Term {
-  instantiate(term, idx, FreeVar(name, var_id))
+fn open(term: Term, idx: DeBruijnIndex, var_id: FreeVarId) -> Term {
+  instantiate(term, idx, FreeVar(var_id))
 }
 
 fn close(term: Term, var_id: FreeVarId, idx: DeBruijnIndex) -> Term {
   match term {
-    FreeVar(_, v_id) if v_id == var_id => BoundVar(idx)
+    FreeVar(v_id) if v_id == var_id => BoundVar(idx)
     Lam(x, ty, body) => Lam(x, close(ty, var_id, idx), close(body, var_id, idx + 1))
     Pi(x, a, b) => Pi(x, close(a, var_id, idx), close(b, var_id, if x is Some(_) { idx + 1 } else { idx }))
     App(f, arg) => App(close(f, var_id, idx), close(arg, var_id, idx))
     Let(x, val, body) => Let(x, close(val, var_id, idx), close(body, var_id, idx + 1))
     Ann(lhs, rhs) => Ann(close(lhs, var_id, idx), close(rhs, var_id, idx))
-    Sort(_) | Bool | Const(_) | BoundVar(_) | FreeVar(_) => term
+    Sort(_) | Const(_) | BoundVar(_) | FreeVar(_) => term
   }
 }
 
@@ -425,7 +426,6 @@ pub impl Show for TypeCheckError with output(self: TypeCheckError, logger) -> Un
 pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
   match term {
     Sort(u) => Sort(u + 1) // Prop : Type 0, Type u : Type (u + 1)
-    Bool => Sort(1) // Type 0
     Const(name) => {
       if self.env.decls.get(name) is Some(decl) {
         match decl {
@@ -440,7 +440,7 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
       }
     }
     BoundVar(_) => raise TypeError(term, "BoundVar")
-    FreeVar(_, var_id) => {
+    FreeVar(var_id) => {
       if self.lookup_free_var(var_id) is Some(t) {
         t
       } else {
@@ -464,7 +464,7 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
 
       let fresh_x = self.declare_fresh(arg_ty)
       defer self.free_vars.remove(fresh_x)
-      let body_ty = self.infer(open(body, 0, x, fresh_x))
+      let body_ty = self.infer(open(body, 0, fresh_x))
       let x = if body_ty.occurs_free(fresh_x) { Some(x) } else { None }
 
       Pi(x, arg_ty, close(body_ty, fresh_x, 0))
@@ -477,10 +477,10 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
         raise TypeError(term, "Invalid Pi argument type, got '\{s1}'")
       }
 
-      let s2 = if x is Some(name) {
+      let s2 = if x is Some(_) {
         let fresh_x = self.declare_fresh(arg_ty)
         defer self.free_vars.remove(fresh_x)
-        close(self.infer(open(body_ty, 0, name, fresh_x)), fresh_x, 0)
+        close(self.infer(open(body_ty, 0, fresh_x)), fresh_x, 0)
       } else {
         self.infer(body_ty)
       }
