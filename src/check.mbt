@@ -101,59 +101,51 @@ fn Context::check_decl(self: Context, name: Name, decl: Decl[Term]) -> Unit rais
     }
     // https://lean-lang.org/doc/reference/latest/The-Type-System/Inductive-Types/#well-formed-inductives  
     // https://ammkrn.github.io/type_checking_in_lean4/declarations/inductive.html#constructor
-    Constructor(inductive_name~, ty~) => {
-      if self.env.decls.get(inductive_name) is Some(Inductive(params~, arity~, ..)) {
-        let _ = ensure_sort("constructor", ty)
-        let arity_tys = arity.collect_pi_types()
-        let ind_level = match arity_tys.last() {
-          Some(Sort(u)) => u
-          last => raise TypeError(ty, "Invalid constructor type for '\{name}': expected resulting type to be a sort, got '\{last}'")
-        }
+    Constructor(inductive_name~, ty=ctor_ty) => {
+      if self.env.decls.get(inductive_name) is Some(Inductive(params~, ty=ind_ty, ..)) {
+        let _ = ensure_sort("constructor", ctor_ty)
 
-        // 1. The constructor's type/telescope has to share the same parameters as the type of the inductive being declared.
-        let mut rem_ty = ty
         let free_vars_to_remove: Array[FreeVarId] = []
         defer {
           for var_id in free_vars_to_remove {
             self.free_vars.remove(var_id)
           }
         }
-        
-        for param in params {
-          let (_, param_ty) = param
 
+        // Open the inductive type's params to establish param FreeVars and get the opened arity
+        let (param_vars, opened_arity) = self.open_binders(ind_ty, params.length(), free_vars_to_remove)
+        let arity_tys = opened_arity.collect_pi_types()
+        let ind_level = match arity_tys.last() {
+          Some(Sort(u)) => u
+          last => raise TypeError(ctor_ty, "Invalid constructor type for '\{name}': expected resulting type to be a sort, got '\{last}'")
+        }
+
+        // 1. Strip params from the constructor type, reusing the inductive type's param FreeVars
+        let mut rem_ty = ctor_ty
+        for i in 0..<param_vars.length() {
           match rem_ty {
-            Pi(x, a, b) => {
-              if !self.is_definitionally_equal(a, param_ty) {
-                raise TypeError(ty, "Constructor '\{name}' parameter type '\{a}' does not match inductive type '\{inductive_name}' parameter type '\{param_ty}'")
+            Pi(_, a, b) => {
+              let { name: param_name, fvar: param_fvar, ty: param_ty } = param_vars[i]
+              if !self.is_def_eq(a, param_ty) {
+                raise TypeError(ctor_ty, "Constructor '\{name}' parameter type '\{a}' does not match inductive type '\{inductive_name}' parameter type '\{param_ty}'")
               }
-              
-              rem_ty = if x is Some(x) {
-                let fresh_x = self.declare_fresh(param_ty)
-                free_vars_to_remove.push(fresh_x)
-                open(b, 0, x, fresh_x)
-              } else {
-                b
-              }
+              rem_ty = instantiate(b, 0, FreeVar(param_name, param_fvar))
             }
-            _ => raise TypeError(ty, "Constructor '\{name}' has too few parameters compared to inductive type '\{inductive_name}'")
+            _ => raise TypeError(ctor_ty, "Constructor '\{name}' has too few parameters compared to inductive type '\{inductive_name}'")
           }
         }
 
+        // 2-4. Check non-parameter constructor arguments
         let mut arg_idx = 0
-        // 2. For the non-parameter elements of the constructor type's telescope, the binder type must actually be a type (must infer as Sort _).
-        // 3. For any non-parameter element of the constructor type's telescope, the element's inferred sort must be less than or equal to the inductive type's sort
-        // or the inductive type being declared has to be a Prop.
-        // 4. No argument to the constructor may contain a non strictly-positive occurrence of the type being declared
         while rem_ty is Pi(x, arg_ty, rest) {
           let s = self.infer(arg_ty)
           if self.whnf(s) is Sort(u) {
             if ind_level > 0 && u > ind_level {
-              raise TypeError(ty, "Invalid universe level in constructor '\{name}': Parameter has type '\{arg_ty}' at universe level '\{u}' which is not less than or equal to the inductive type's resulting universe level '\{ind_level}'")
+              raise TypeError(ctor_ty, "Invalid universe level in constructor '\{name}': Parameter has type '\{arg_ty}' at universe level '\{u}' which is not less than or equal to the inductive type's resulting universe level '\{ind_level}'")
             }
 
             if !self.is_strictly_positive(arg_ty, inductive_name) {
-              raise TypeError(ty, "Constructor '\{name}' has a non strictly-positive occurrence of the inductive type being declared in argument #\{arg_idx + 1}")
+              raise TypeError(ctor_ty, "Constructor '\{name}' has a non strictly-positive occurrence of the inductive type being declared in argument #\{arg_idx + 1}")
             }
 
             rem_ty = if x is Some(x) {
@@ -164,67 +156,18 @@ fn Context::check_decl(self: Context, name: Name, decl: Decl[Term]) -> Unit rais
               rest
             }
           } else {
-            raise TypeError(ty, "Constructor '\{name}' has non-type parameter '\{arg_ty}'")
+            raise TypeError(ctor_ty, "Constructor '\{name}' has non-type parameter '\{arg_ty}'")
           }
 
           arg_idx += 1
         }
 
-        // 5. The end of the constructor's telescope must be a valid application of arguments to the type being declared.
-        let is_valid = match rem_ty {
-          Const(ref_name) if ref_name == inductive_name => true
-          App(_) => {
-            // rem_ty should be of the form `I p1...pm, i1 ..in` (I applied to the parameters and indices)
-            let (head, args) = rem_ty.collect_app_args()
-            let mut is_valid = true
-
-            if head is Const(ref_name) && ref_name == inductive_name {
-              if args.length() < params.length() {
-                is_valid = false
-              } else {
-                // check parameters
-                for param, arg in params.zip_to_iter2(args) {
-                  let arg_ty = self.infer(arg)
-                  if !self.is_definitionally_equal(param.1, arg_ty) {
-                    is_valid = false
-                    break
-                  }
-                }
-
-                if is_valid {
-                  // check indices
-                  let indices = arity_tys[:arity_tys.length() - 1] // all but the resulting sort
-                  if indices.length() != args.length() - params.length() {
-                    is_valid = false
-                  } else {
-                    let mut i = params.length()
-
-                    for index in indices {
-                      let index_ty = self.infer(args[i])
-                      if !self.is_definitionally_equal(index, index_ty) {
-                        is_valid = false
-                        break
-                      }
-
-                      i += 1
-                    }
-                  }
-                }
-              }
-            } else {
-              is_valid = false
-            }
-            
-            is_valid
-          }
-          _ => false
-        }
-
-        if !is_valid {
-          raise TypeError(ty, "Constructor '\{name}' has invalid resulting type '\{rem_ty}', expected an application of the inductive type being declared to its parameters")
+        // 5. Check return type is a valid application of the inductive type
+        if !self.is_valid_inductive_app(rem_ty, inductive_name, param_vars, arity_tys) {
+          raise TypeError(ctor_ty, "Constructor '\{name}' has invalid resulting type '\{rem_ty}', expected an application of the inductive type being declared to its parameters")
         }
       } else {
-        raise TypeError(ty, "Constructor '\{name}' refers to unknown inductive type '\{inductive_name}'")
+        raise TypeError(ctor_ty, "Constructor '\{name}' refers to unknown inductive type '\{inductive_name}'")
       }
     }
   }
@@ -256,6 +199,79 @@ test "is_strictly_positive" {
   assert_true(ctx.is_strictly_positive(Pi(None, bool, bool), ind))
   assert_true(ctx.is_strictly_positive(Pi(None, bool, Const(ind)), ind))
   assert_false(ctx.is_strictly_positive(Pi(None, Const(ind), Const(ind)), ind))
+}
+
+struct OpenedBinder {
+  name: String
+  fvar: FreeVarId
+  ty: Term
+}
+
+// Opens `n` leading Pi binders of `ty`, replacing each bound variable with a fresh FreeVar.
+fn Context::open_binders(
+  self: Context,
+  ty: Term,
+  n: Int,
+  cleanup: Array[FreeVarId]
+) -> (Array[OpenedBinder], Term) raise TypeCheckError {
+  let binders: Array[OpenedBinder] = []
+  let mut remaining = ty
+
+  for _ in 0..<n {
+    match remaining {
+      Pi(x, a, b) => {
+        let name = match x { Some(x) => x; None => "_" }
+        let fresh = self.declare_fresh(a)
+        cleanup.push(fresh)
+        binders.push({ name, fvar: fresh, ty: a })
+        remaining = instantiate(b, 0, FreeVar(name, fresh))
+      }
+      _ => raise TypeError(ty, "Expected at least \{n} Pi binders")
+    }
+  }
+
+  (binders, remaining)
+}
+
+// Checks that `term` is a valid return type for a constructor of `inductive_name`:
+//   - head is `inductive_name`
+//   - the first `param_vars.length()` arguments are exactly the parameter FreeVars (by value)
+//   - the remaining arguments match the index types from the opened arity
+fn Context::is_valid_inductive_app(
+  self: Context,
+  term: Term,
+  inductive_name: Name,
+  param_vars: Array[OpenedBinder],
+  arity_tys: Array[Term]
+) -> Bool raise TypeCheckError {
+  let (head, args) = term.collect_app_args()
+  let n_params = param_vars.length()
+  let n_indices = arity_tys.length() - 1
+
+  let head_ok = match head {
+    Const(n) => n == inductive_name
+    _ => false
+  }
+
+  if !head_ok || args.length() != n_params + n_indices {
+    return false
+  }
+
+  for i in 0..<n_params {
+    let { name, fvar, .. } = param_vars[i]
+    if !self.is_def_eq(args[i], FreeVar(name, fvar)) {
+      return false
+    }
+  }
+
+  for i in 0..<n_indices {
+    let index_ty = self.infer(args[n_params + i])
+    if !self.is_def_eq(arity_tys[i], index_ty) {
+      return false
+    }
+  }
+
+  true
 }
 
 fn Context::fresh_var_id(self: Context) -> FreeVarId raise TypeCheckError {
@@ -520,7 +536,7 @@ pub fn Context::check(self: Context, term: Term, ty: Term) -> Unit raise TypeChe
     _ => {
       let inferred_ty_norm = self.normalise(self.infer(term))
       let ty_norm = self.normalise(ty)
-      if !self.is_definitionally_equal(inferred_ty_norm, ty_norm) {
+      if !self.is_def_eq(inferred_ty_norm, ty_norm) {
         raise TypeError(term, "Expected type '\{ty_norm}', got '\{inferred_ty_norm}'")
       }
     }
@@ -530,7 +546,7 @@ pub fn Context::check(self: Context, term: Term, ty: Term) -> Unit raise TypeChe
 // TODO: this is currently very naive and normalises both terms fully before comparing them, which is very inefficient.
 // see https://rocq-prover.org/doc/V8.19.0/refman/language/core/conversion.html for how to do this more efficiently by interleaving reduction and comparison
 // and only reducing as much as needed to determine definitional equality
-pub fn Context::is_definitionally_equal(self: Context, term: Term, expected: Term) -> Bool raise TypeCheckError {
+pub fn Context::is_def_eq(self: Context, term: Term, expected: Term) -> Bool raise TypeCheckError {
   let t1_norm = self.normalise(term)
   let t2_norm = self.normalise(expected)
 
@@ -542,7 +558,7 @@ pub fn Context::is_definitionally_equal(self: Context, term: Term, expected: Ter
       (Sort(u1), Sort(u2)) => u1 <= u2
       (Pi(_, a1, b1), Pi(_, a2, b2)) => {
         // Domains must be exactly equal, codomains can be cumulative
-        a1.alpha_eq(a2) && self.is_definitionally_equal(b1, b2)
+        a1.alpha_eq(a2) && self.is_def_eq(b1, b2)
       }
       _ => false
     }
@@ -784,9 +800,14 @@ test "declarations" {
   ))
 
   assert_ok((
-    #| inductive Vec (A : Type) : Nat -> Type
+    #|inductive Vec (A : Type) : Nat -> Type
     #|  | nil : Vec A Nat.zero
     #|  | cons : A -> forall n : Nat, Vec A n -> Vec A (Nat.succ n)
+  ))
+
+  assert_ok((
+    #|inductive Eq (A : Type) : A -> A -> Prop
+    #|  | refl : forall x : A, Eq A x x
   ))
   
   // duplicate declaration
@@ -824,13 +845,15 @@ test "declarations" {
     #|inductive IllFormed5 : Type
     #|  | nope : Nat -> Bool
   ))
-  
+
+  // constructor result type is a different inductive applied to wrong parameters   
   assert_not_ok((
     #|inductive MyNat : Type
     #|  | zero : MyNat
     #|  | succ : MyNat -> Nat
   ))
 
+  // no beta reduction is performed in constructor parameters
   assert_not_ok((
     #|inductive Test : Type
     #|  | mk : (fun T : Type => (T -> T) -> T) Test
@@ -839,5 +862,61 @@ test "declarations" {
   assert_not_ok((
     #|inductive Test : Type
     #|  | mk : (fun T : Type => T -> T) Test
+  ))
+
+  // two Prop-valued parameters
+  assert_ok((
+    #|inductive And (A : Prop) (B : Prop) : Prop
+    #|  | intro : A -> B -> And A B
+  ))
+
+  // multiple constructors with Prop-valued parameters
+  assert_ok((
+    #|inductive Or (A : Prop) (B : Prop) : Prop
+    #|  | inl : A -> Or A B
+    #|  | inr : B -> Or A B
+  ))
+
+  // no parameters, just an index
+  assert_ok((
+    #|inductive Fin : Nat -> Type
+    #|  | zero : forall n : Nat, Fin (Nat.succ n)
+    #|  | succ : forall n : Nat, Fin n -> Fin (Nat.succ n)
+  ))
+
+  // dependent parameter (P depends on A)
+  assert_ok((
+    #|inductive Exists (A : Type) (P : A -> Prop) : Prop
+    #|  | intro : forall a : A, P a -> Exists A P
+  ))
+
+  // parameter with a large elimination (Type-valued inductive with Type param in ctor)
+  assert_ok((
+    #|inductive Wrap (A : Type) : Type
+    #|  | mk : A -> Wrap A
+  ))
+
+  // swapped parameters in return type
+  assert_not_ok((
+    #|inductive Pair (A : Type) (B : Type) : Type
+    #|  | mk : A -> B -> Pair B A
+  ))
+
+  // wrong number of indices (missing index)
+  assert_not_ok((
+    #|inductive BadVec (A : Type) : Nat -> Type
+    #|  | nil : BadVec A
+  ))
+
+  // wrong number of indices (extra index)
+  assert_not_ok((
+    #|inductive BadInd : Type
+    #|  | mk : BadInd Nat.zero
+  ))
+
+  // constructor returns a different inductive applied to wrong param
+  assert_not_ok((
+    #|inductive MyList (A : Type) : Type
+    #|  | nil : MyList Bool
   ))
 }
