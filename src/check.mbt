@@ -128,10 +128,10 @@ fn Context::check_decl(self: Context, name: Name, decl: Decl[Term]) -> Unit rais
                 raise TypeError(ty, "Constructor '\{name}' parameter type '\{a}' does not match inductive type '\{inductive_name}' parameter type '\{param_ty}'")
               }
               
-              rem_ty = if x is Some(_) {
+              rem_ty = if x is Some(x) {
                 let fresh_x = self.declare_fresh(param_ty)
                 free_vars_to_remove.push(fresh_x)
-                open(b, 0, fresh_x)
+                open(b, 0, x, fresh_x)
               } else {
                 b
               }
@@ -156,10 +156,10 @@ fn Context::check_decl(self: Context, name: Name, decl: Decl[Term]) -> Unit rais
               raise TypeError(ty, "Constructor '\{name}' has a non strictly-positive occurrence of the inductive type being declared in argument #\{arg_idx + 1}")
             }
 
-            rem_ty = if x is Some(_) {
+            rem_ty = if x is Some(x) {
               let fresh_x = self.declare_fresh(arg_ty)
               free_vars_to_remove.push(fresh_x)
-              open(rest, 0, fresh_x)
+              open(rest, 0, x, fresh_x)
             } else {
               rest
             }
@@ -231,10 +231,8 @@ fn Context::check_decl(self: Context, name: Name, decl: Decl[Term]) -> Unit rais
 }
 
 fn Context::is_strictly_positive(self: Context, ty: Term, inductive_type_name: Name) -> Bool raise TypeCheckError {
-  let ind = Const(inductive_type_name)
-
   // non-recursive case
-  if !ind.occurs_in(ty) {
+  if !const_occurs_in(inductive_type_name, ty) {
     return true
   }
 
@@ -242,10 +240,10 @@ fn Context::is_strictly_positive(self: Context, ty: Term, inductive_type_name: N
     Const(_) => true // `I`: simple case
     App(_) => { // `I t1, ..., tn` simple case, where I does not occur in ti for any i
       let (_head, args) = ty.collect_app_args()
-      return !args.iter().any(arg => ind.occurs_in(arg))
+      return !args.iter().any(arg => const_occurs_in(inductive_type_name, arg))
     }
     Pi(_, a, b) => { // functional case
-      !ind.occurs_in(a) && self.is_strictly_positive(b, inductive_type_name)
+      !const_occurs_in(inductive_type_name, a) && self.is_strictly_positive(b, inductive_type_name)
     }
     _ => true
   }
@@ -310,7 +308,7 @@ fn Context::normalise(self: Context, term: Term) -> Term raise TypeCheckError {
       defer self.free_vars.remove(fresh_x)
 
       // 2. Open the binder, replacing BoundVar(0) with the FreeVar
-      let opened = open(body, 0, fresh_x)
+      let opened = open(body, 0, x, fresh_x)
 
       // 3. Normalise the locally closed body
       let norm_body = self.normalise(opened)
@@ -327,11 +325,11 @@ fn Context::normalise(self: Context, term: Term) -> Term raise TypeCheckError {
     }
     Pi(x, a, b) => {
       let a_norm = self.normalise(a)
-      let b_norm = if x is Some(_) {
+      let b_norm = if x is Some(x) {
         let fresh_x = self.declare_fresh(a)
         defer self.free_vars.remove(fresh_x)
 
-        let opened = open(b, 0, fresh_x)
+        let opened = open(b, 0, x, fresh_x)
         close(self.normalise(opened), fresh_x, 0)
       } else {
         self.normalise(b)
@@ -390,13 +388,13 @@ fn instantiate(term: Term, idx: DeBruijnIndex, s: Term) -> Term {
   }
 }
 
-fn open(term: Term, idx: DeBruijnIndex, var_id: FreeVarId) -> Term {
-  instantiate(term, idx, FreeVar(var_id))
+fn open(term: Term, idx: DeBruijnIndex, name: String, var_id: FreeVarId) -> Term {
+  instantiate(term, idx, FreeVar(name, var_id))
 }
 
 fn close(term: Term, var_id: FreeVarId, idx: DeBruijnIndex) -> Term {
   match term {
-    FreeVar(v_id) if v_id == var_id => BoundVar(idx)
+    FreeVar(_, v_id) if v_id == var_id => BoundVar(idx)
     Lam(x, ty, body) => Lam(x, close(ty, var_id, idx), close(body, var_id, idx + 1))
     Pi(x, a, b) => Pi(x, close(a, var_id, idx), close(b, var_id, if x is Some(_) { idx + 1 } else { idx }))
     App(f, arg) => App(close(f, var_id, idx), close(arg, var_id, idx))
@@ -443,7 +441,7 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
       }
     }
     BoundVar(_) => raise TypeError(term, "BoundVar")
-    FreeVar(var_id) => {
+    FreeVar(_, var_id) => {
       if self.lookup_free_var(var_id) is Some(t) {
         t
       } else {
@@ -467,7 +465,7 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
 
       let fresh_x = self.declare_fresh(arg_ty)
       defer self.free_vars.remove(fresh_x)
-      let body_ty = self.infer(open(body, 0, fresh_x))
+      let body_ty = self.infer(open(body, 0, x, fresh_x))
       let x = if body_ty.occurs_free(fresh_x) { Some(x) } else { None }
 
       Pi(x, arg_ty, close(body_ty, fresh_x, 0))
@@ -480,10 +478,10 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
         raise TypeError(term, "Invalid Pi argument type, got '\{s1}'")
       }
 
-      let s2 = if x is Some(_) {
+      let s2 = if x is Some(x) {
         let fresh_x = self.declare_fresh(arg_ty)
         defer self.free_vars.remove(fresh_x)
-        close(self.infer(open(body_ty, 0, fresh_x)), fresh_x, 0)
+        close(self.infer(open(body_ty, 0, x, fresh_x)), fresh_x, 0)
       } else {
         self.infer(body_ty)
       }
@@ -772,12 +770,12 @@ test "declarations" {
 
   assert_ok("inductive False : Prop")
   assert_ok("inductive True : Prop | intro : True")
-  assert_ok("inductive MyList (A : Type) : Type | nil : MyList A | cons : A -> MyList A")
+  assert_ok("inductive List (A : Type) : Type | nil : List A | cons : A -> List A")
 
   assert_ok((
-    #|inductive MyTree (A : Type) : Type
-    #|  | leaf : A -> MyTree A  
-    #|  | node : MyTree A -> MyTree A -> MyTree A
+    #|inductive Tree (A : Type) : Type
+    #|  | leaf : A -> Tree A  
+    #|  | node : Tree A -> Tree A -> Tree A
   ))
 
   assert_ok((
@@ -825,5 +823,21 @@ test "declarations" {
   assert_not_ok((
     #|inductive IllFormed5 : Type
     #|  | nope : Nat -> Bool
+  ))
+  
+  assert_not_ok((
+    #|inductive MyNat : Type
+    #|  | zero : MyNat
+    #|  | succ : MyNat -> Nat
+  ))
+
+  assert_not_ok((
+    #|inductive Test : Type
+    #|  | mk : (fun T : Type => (T -> T) -> T) Test
+  ))
+
+  assert_not_ok((
+    #|inductive Test : Type
+    #|  | mk : (fun T : Type => T -> T) Test
   ))
 }

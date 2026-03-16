@@ -261,11 +261,12 @@ fn Parser::expect(self: Parser, expected: Token) -> Unit raise ParserError {
 }
 
 fn Parser::expect_var(self: Parser) -> String raise ParserError {
-  if self.peek() is Var(v) {
-    self.advance()
-    v
-  } else {
-    raise Message("Expected variable")
+  match self.peek() {
+    Var(name) => {
+      self.advance()
+      name
+    }
+    tok => raise Message("Expected variable, got '\{tok}'")
   }
 }
 
@@ -583,5 +584,4 @@ test "parser" {
       ),
     )
   )
-
 }

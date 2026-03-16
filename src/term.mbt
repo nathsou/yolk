@@ -4,7 +4,7 @@ pub enum Term {
   Const(Name)
   // locally nameless representation: bound variables are represented by their de Bruijn index, free variables have a name
   BoundVar(DeBruijnIndex)
-  FreeVar(FreeVarId)
+  FreeVar(String, FreeVarId)
   App(Term, Term)
   Lam(String, Term, Term)
   Pi(String?, Term, Term)
@@ -23,7 +23,7 @@ pub fn Term::alpha_eq(self: Term, other: Term) -> Bool {
     (Sort(u1), Sort(u2)) => u1 == u2
     (Const(r1), Const(r2)) => r1 == r2
     (BoundVar(i), BoundVar(j)) => i == j
-    (FreeVar(id1), FreeVar(id2)) => id1 == id2
+    (FreeVar(_, id1), FreeVar(_, id2)) => id1 == id2
     (App(f, x), App(g, y)) => x.alpha_eq(y) && f.alpha_eq(g)
     (Lam(_, t1, body1), Lam(_, t2, body2)) => t1.alpha_eq(t2) && body1.alpha_eq(body2)
     (Pi(_, a1, b1), Pi(_, a2, b2)) => a1.alpha_eq(a2) && b1.alpha_eq(b2)
@@ -50,7 +50,7 @@ fn Term::has_loose_bvar(self: Term, depth: DeBruijnIndex) -> Bool {
 
 fn Term::occurs_free(self: Term, var_id: FreeVarId) -> Bool {
   match self {
-    FreeVar(id) => id == var_id
+    FreeVar(_, id) => id == var_id
     App(f, arg) => f.occurs_free(var_id) || arg.occurs_free(var_id)
     Lam(_, ty, body) => ty.occurs_free(var_id) || body.occurs_free(var_id)
     Pi(_, a, b) => a.occurs_free(var_id) || b.occurs_free(var_id)
@@ -60,27 +60,22 @@ fn Term::occurs_free(self: Term, var_id: FreeVarId) -> Bool {
   }
 }
 
-fn Term::occurs_in(self: Term, term: Term) -> Bool {
-  if self.alpha_eq(term) {
-    true
-  } else {
-    match term {
-      App(f, arg) => self.occurs_in(f) || self.occurs_in(arg) 
-      Lam(_, ty, body) => self.occurs_in(ty) || self.occurs_in(body)
-      Pi(_, a, b) => self.occurs_in(a) || self.occurs_in(b)
-      Let(_, val, body) => self.occurs_in(val) || self.occurs_in(body)
-      Ann(lhs, rhs) => self.occurs_in(lhs) || self.occurs_in(rhs)
-      Sort(_) | Const(_) | BoundVar(_) | FreeVar(_) => false
-    }
+fn const_occurs_in(c: Name, term: Term) -> Bool {
+  match term {
+    Const(name) => name == c
+    App(f, arg) => const_occurs_in(c, f) || const_occurs_in(c, arg)
+    Lam(_, ty, body) => const_occurs_in(c, ty) || const_occurs_in(c, body)
+    Pi(_, a, b) => const_occurs_in(c, a) || const_occurs_in(c, b)
+    Let(_, val, body) => const_occurs_in(c, val) || const_occurs_in(c, body)
+    Ann(lhs, rhs) => const_occurs_in(c, lhs) || const_occurs_in(c, rhs)
+    Sort(_) | FreeVar(_) | BoundVar(_) => false
   }
 }
 
-test "occurs_in" {
-  assert_true(Term::Const(Leaf("X")).occurs_in(Const(Leaf("X"))))
-  assert_false(Term::Const(Leaf("X")).occurs_in(Const(Leaf("Y"))))
-  assert_true(FreeVar(0).occurs_in(App(Const(Leaf("F")), FreeVar(0))))
-  assert_true(FreeVar(0).occurs_in(App(App(Const(Leaf("F")), FreeVar(0)), Const(Leaf("Y")))))
-  assert_true(FreeVar(0).occurs_in(Pi(None, FreeVar(0), FreeVar(0))))
+test "const_occurs_in" {
+  assert_true(const_occurs_in(Leaf("X"), Const(Leaf("X"))))
+  assert_false(const_occurs_in(Leaf("X"), Const(Leaf("Y"))))
+  assert_false(const_occurs_in(Leaf("X"), App(FreeVar("X", 0), Const(Leaf("Y")))))
 }
 
 fn Term::collect_app_args(self: Term) -> (Term, Array[Term]) {
@@ -126,7 +121,7 @@ fn Term::fmt(self: Term, bindings~: Array[String], depth~: Int, logger: &Logger)
         logger.write_string(bindings[eff_idx])
       }
     }
-    FreeVar(id) => logger.write_string("%\{id}")
+    FreeVar(name, _) => logger.write_string(name)
     Const(name) => logger.write_object(name)
     App(lhs, rhs) => {
       let lhs_needs_parens = lhs is Lam(_)

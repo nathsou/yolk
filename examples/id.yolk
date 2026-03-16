@@ -45,3 +45,15 @@ def Not.intro : forall P : Prop, (P -> False) -> Not P := fun P : Prop => fun h 
 inductive Tree (A : Type) : Type
   | leaf : A -> Tree A
   | node : Tree A -> Tree A -> Tree A
+
+-- data eq : Pi (a : Type), a -> a -> Type
+-- | refl : Pi (a : Type)(x : a), eq a x x
+
+-- inductive Eq : forall A : Type, A -> A -> Type
+--   | refl : forall A : Type, forall x : A, Eq A x x
+
+-- inductive Eq2 (A : Type) : A -> A -> Prop
+--   | refl : forall x : A, Eq2 A x x
+
+inductive Test : Type
+  | mk : (fun T : Type => (T -> T) -> T) Test
