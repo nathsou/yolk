@@ -328,15 +328,16 @@ fn Parser::parse_inductive(self: Parser) -> TopLevel[STerm] raise ParserError {
   let name = self.parse_name()
   let params: Array[(String, STerm)] = []
 
-  while self.peek_safe() is Some(Lparen) {
-    params.push(self.parse_binder())
+  while self.matches(Lparen) {
+    let binder = self.parse_binder()
+    params.push((binder.name, binder.ty))
   }
 
   self.expect(Colon)
   let arity = self.parse_term()
   let constructors: Array[(String, STerm)] = []
   
-  while self.peek_safe() is Some(Pipe) {
+  while self.matches(Pipe) {
     self.advance()
     let ctor_name = self.expect_var()
     self.expect(Colon)
@@ -359,13 +360,30 @@ fn Parser::parse_command(self: Parser) -> TopLevel[STerm] raise ParserError {
   Command(name, args)
 }
 
-fn Parser::parse_binder(self: Parser) -> (String, STerm) raise ParserError {
-  self.expect(Lparen)
-  let x= self.expect_var()
+struct Binder {
+  name: String
+  ty: STerm
+}
+
+fn Parser::parse_binder(self: Parser) -> Binder raise ParserError {
+  let lparen_matched = self.matches(Lparen)
+  if lparen_matched { self.advance() }
+  let name = self.expect_var()
   self.expect(Colon)
   let ty = self.parse_term()
-  self.expect(Rparen)
-  (x, ty)
+  if lparen_matched { self.expect(Rparen) }
+  
+  { name, ty }
+}
+
+fn Parser::parse_binders(self: Parser) -> Array[Binder] raise ParserError {
+  let binders: Array[Binder] = [self.parse_binder()]
+
+  while self.matches(Lparen) {
+    binders.push(self.parse_binder())
+  }
+
+  binders
 }
 
 fn Parser::parse_term(self: Parser) -> STerm raise ParserError {
@@ -379,22 +397,22 @@ fn Parser::parse_term(self: Parser) -> STerm raise ParserError {
 
 fn Parser::parse_fun(self: Parser) -> STerm raise ParserError {
   self.expect(Fun)
-  let v = self.expect_var()
-  self.expect(Colon)
-  let ty = self.parse_term()
+  let binders = self.parse_binders()
   self.expect(ThickArrow)
   let body = self.parse_term()
-  Fun(v, ty, body) 
+
+  // desugar a fun with multiple binders into nested funs
+  binders.rev_fold(init=body, (acc, binder) => Fun(binder.name, binder.ty, acc))
 }
 
 fn Parser::parse_forall(self: Parser) -> STerm raise ParserError {
   self.expect(Forall)
-  let v = self.expect_var()
-  self.expect(Colon)
-  let ty = self.parse_term()
+  let binders = self.parse_binders()
   self.expect(Comma)
   let rhs = self.parse_term()
-  Pi(Some(v), ty, rhs)
+
+  // desugar a forall with multiple binders into nested pis
+  binders.rev_fold(init=rhs, (acc, binder) => Pi(Some(binder.name), binder.ty, acc))
 }
 
 fn Parser::parse_let(self: Parser) -> STerm raise ParserError {
@@ -546,6 +564,7 @@ test "parser" {
   expect_term("forall b: Bool, b", Pi(Some("b"), v("Bool"), v("b")))
   expect_term("fun T: Type 2 => forall x: T, T", Fun("T", Sort(3), Pi(Some("x"), v("T"), v("T"))))
   expect_term("let id := fun x: A => x in id", Let("id", Fun("x", v("A"), v("x")), v("id")))
+  expect_term("fun (b : Bool) (n : Nat) => n", Fun("b", v("Bool"), Fun("n", v("Nat"), v("n"))))
   expect_term_err("fun x => x)", Expected(expected=Colon, received=ThickArrow))
   
   expect_top_level(

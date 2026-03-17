@@ -29,6 +29,8 @@ fn main {
             println("Error: \{err}")
           }
         }
+      } else {
+        println(cmd.render_help())
       }
     }
   }

@@ -25,7 +25,6 @@ pub fn Context::new() -> Context {
   }
 
   ctx.init_default_inductives()
-
   ctx
 }
 
@@ -200,7 +199,7 @@ fn is_ind_app(term: Term, ind_name: Name, param_vars: Array[OpenedBinder]) -> Ar
       // Check that the first n_params args match the param FreeVars
       for i in 0..<n_params {
         let { name, fvar, .. } = param_vars[i]
-        if !args[i].alpha_eq(FreeVar(name, fvar)) {
+        if !args[i].is_alpha_eq(FreeVar(name, fvar)) {
           return None
         }
       }
@@ -957,7 +956,7 @@ pub fn Context::is_def_eq(self: Context, term: Term, expected: Term) -> Bool rai
   let t1_norm = self.normalise(term)
   let t2_norm = self.normalise(expected)
 
-  if t1_norm.alpha_eq(t2_norm) {
+  if t1_norm.is_alpha_eq(t2_norm) {
     true
   } else {
     match (t1_norm, t2_norm) {
@@ -997,7 +996,7 @@ fn elab_term(term: String, ctx~: Context? = None) -> (Context, Term) raise {
 fn assert_nf(term: String, nf: String) -> Unit raise {
   let (ctx, term_elab) = elab_term(term)
   let (_, nf_elab) = elab_term(nf, ctx=Some(ctx))
-  if !ctx.normalise(term_elab).alpha_eq(nf_elab) {
+  if !ctx.normalise(term_elab).is_alpha_eq(nf_elab) {
     fail("Expected normal form of '\{term}' to be '\{nf}', got '\{ctx.normalise(term_elab)}'")
   }
 }
@@ -1009,7 +1008,7 @@ test "normalisation" {
   assert_nf("(fun x: Bool => x) true", "true")
   assert_nf("(fun A: Type => ((fun T: Type => forall x: T, T) A)) Bool", "Bool -> Bool")
 
-  // eta-conversion
+  // eta-conversion (regression tests: nested fun still works)
   assert_nf("fun f: Bool -> Bool => fun x: Bool => f x", "fun f: Bool -> Bool => f")
   assert_nf("fun f: Bool -> Bool -> Bool => fun x: Bool => f x x", "fun f: Bool -> Bool -> Bool => fun x: Bool => f x x")
   assert_nf("fun f: Bool -> Bool => fun x: Bool => f (f x)", "fun f: Bool -> Bool => fun x: Bool => f (f x)")
@@ -1018,15 +1017,15 @@ test "normalisation" {
   // let expressions
   assert_nf("let x := true in x", "true")
   assert_nf("let f := fun x: Bool => x in f true", "true")
-  assert_nf("let id := fun A: Type => fun x: A => x in id Bool true", "true")
-  assert_nf("let const := fun A: Type => fun B: Type => fun x: A => fun y: B => x in const Bool Bool true false", "true")
+  assert_nf("let id := fun (A: Type) (x: A) => x in id Bool true", "true")
+  assert_nf("let const := fun (A: Type) (B: Type) (x: A) (y: B) => x in const Bool Bool true false", "true")
 
   // beta reduction
   assert_nf("(fun p: Bool -> Bool => p true) (fun x: Bool => x)", "true")
 
   // complex applications
-  assert_nf("(fun A: Type => fun x: A => x) Bool true", "true")
-  assert_nf("(fun f: Bool -> Bool => fun x: Bool => f (f x)) (fun x: Bool => x) true", "true")
+  assert_nf("(fun (A: Type) (x: A) => x) Bool true", "true")
+  assert_nf("(fun (f: Bool -> Bool) (x: Bool) => f (f x)) (fun x: Bool => x) true", "true")
 }
 
 test "type checking" {
@@ -1068,7 +1067,7 @@ test "type checking" {
   assert_type("(fun A: Type => A -> Bool) Bool", "Type")
   assert_type("fun A: Type => fun B: Type => A -> B", "forall A: Type, forall B: Type, Type")
   assert_type("let x := true in fun y: Type => x", "forall A: Type, Bool")
-  assert_type("let T := Bool -> Bool in fun f: T => fun x: Bool => f x", "(Bool -> Bool) -> Bool -> Bool")
+  assert_type("let T := Bool -> Bool in fun (f: T) (x: Bool) => f x", "(Bool -> Bool) -> Bool -> Bool")
   assert_type("fun A: Type 1 => A -> Bool", "forall A: Type 1, Type 1")
   assert_type("fun x: Type 1 => x", "forall x: Type 1, Type 1")
 
@@ -1080,21 +1079,21 @@ test "type checking" {
   {
     let bool_ty = "forall A: Type, A -> A -> A"
     assert_type(bool_ty, "Type 1")
-    assert_type("fun A: Type => fun t: A => fun f: A => t", bool_ty)
-    assert_type("fun A: Type => fun t: A => fun f: A => f", bool_ty)
+    assert_type("fun (A: Type) (t: A) (f: A) => t", bool_ty)
+    assert_type("fun (A: Type) (t: A) (f: A) => f", bool_ty)
   }
 
   // church naturals
   {
     let nat_ty = "forall A: Type, (A -> A) -> A -> A"
-    let c_zero = "fun A: Type => fun succ: A -> A => fun z: A => z"
+    let c_zero = "fun (A: Type) (succ: A -> A) (z: A) => z"
     assert_type(nat_ty, "Type 1")
     assert_type(c_zero, nat_ty)
   }
 
   {
     // K-Combinator
-    let k_comb = "fun A: Type => fun B: Type => fun x: A => fun y: B => x"
+    let k_comb = "fun (A: Type) (B: Type) (x: A) (y: B) => x"
     let k_type = "forall A: Type, forall B: Type, A -> B -> A"
     assert_type(k_comb, k_type)
   }
@@ -1111,7 +1110,7 @@ test "type checking" {
   }
 
   {
-    let dep_apply = "fun f: Bool -> Type => fun b: Bool => f b"
+    let dep_apply = "fun (f: Bool -> Type) (b: Bool) => f b"
     let dep_apply_ty = "forall f: Bool -> Type, Bool -> Type"
     assert_type(dep_apply, dep_apply_ty)
   }
@@ -1132,38 +1131,38 @@ test "type checking" {
 
   // dependent pair and logical operations
   assert_type("forall A: Type, forall B: A -> Type, Type", "Type 1")
-  assert_type("fun A: Type => fun B: Type => forall C: Type, (A -> B -> C) -> C", "forall A: Type, forall B: Type, Type 1")
+  assert_type("fun (A: Type) (B: Type) => forall C: Type, (A -> B -> C) -> C", "forall (A: Type) (B: Type), Type 1")
 
   // function abstraction validation
   assert_type_err("fun x: true => x")
-  assert_type("fun A: Type => fun P: A -> Type => fun a: A => P a", "forall A: Type, (A -> Type) -> A -> Type")
+  assert_type("fun (A: Type) (P: A -> Type) (a: A) => P a", "forall A: Type, (A -> Type) -> A -> Type")
 
   // universe applications
-  assert_type("(fun A: Type => fun x: A => x) Bool", "Bool -> Bool")
-  assert_type("(fun A: Type 1 => fun x: A => x) Bool", "Bool -> Bool")
+  assert_type("(fun (A: Type) (x: A) => x) Bool", "Bool -> Bool")
+  assert_type("(fun (A: Type 1) (x: A) => x) Bool", "Bool -> Bool")
 
   // logical operations (Church encoding)
   {
     // Conjunction (and)
-    let and_ty = "fun A: Prop => fun B: Prop => forall C: Prop, (A -> B -> C) -> C"
-    assert_type(and_ty, "forall A: Prop, forall B: Prop, Prop")
+    let and_ty = "fun (A: Prop) (B: Prop) => forall C: Prop, (A -> B -> C) -> C"
+    assert_type(and_ty, "forall (A: Prop) (B: Prop), Prop")
 
     // Pair constructor for and: fun A, B, a, b, C, f => f a b
-    let pair = "fun A: Prop => fun B: Prop => fun a: A => fun b: B => fun C: Type => fun f: A -> B -> C => f a b"
+    let pair = "fun (A: Prop) (B: Prop) (a: A) (b: B) (C: Type) (f: A -> B -> C) => f a b"
     let pair_ty = "forall A: Prop, forall B: Prop, A -> B -> (forall C: Type, (A -> B -> C) -> C)"
     assert_type(pair, pair_ty)
 
     // Disjunction (or)
-    let or_ty = "fun A: Prop => fun B: Prop => forall C: Prop, (A -> C) -> (B -> C) -> C"
-    assert_type(or_ty, "forall A: Prop, forall B: Prop, Prop")
+    let or_ty = "fun (A: Prop) (B: Prop) => forall C: Prop, (A -> C) -> (B -> C) -> C"
+    assert_type(or_ty, "forall (A: Prop) (B: Prop), Prop")
 
     // Left constructor for or: fun A, B, a, C, l, r => l a
-    let left = "fun A: Prop => fun B: Prop => fun a: A => fun C: Prop => fun l: A -> C => fun r: B -> C => l a"
+    let left = "fun (A: Prop) (B: Prop) (a: A) (C: Prop) (l: A -> C) (r: B -> C) => l a"
     let left_ty = "forall A: Prop, forall B: Prop, A -> (forall C: Prop, (A -> C) -> ((B -> C) -> C))"
     assert_type(left, left_ty)
 
     // Right constructor for or: fun A, B, b, C, l, r => r b
-    let right = "fun A: Prop => fun B: Prop => fun b: B => fun C: Prop => fun l: A -> C => fun r: B -> C => r b"
+    let right = "fun (A: Prop) (B: Prop) (b: B) (C: Prop) (l: A -> C) (r: B -> C) => r b"
     let right_ty = "forall A: Prop, forall B: Prop, B -> (forall C: Prop, (A -> C) -> ((B -> C) -> C))"
     assert_type(right, right_ty)
 
@@ -1176,7 +1175,7 @@ test "type checking" {
     assert_type(not_ty, "forall A: Prop, Prop")
 
     // Law of Non-contradiction: not (A and (not A))
-    let ncontra = "fun A: Prop => fun p: (forall C: Prop, (A -> (A -> (\{false_ty})) -> C) -> C) => p (\{false_ty}) (fun a: A => fun na: A -> (\{false_ty}) => na a)"
+    let ncontra = "fun (A: Prop) (p: (forall C: Prop, (A -> (A -> (\{false_ty})) -> C) -> C)) => p (\{false_ty}) (fun (a: A) (na: A -> (\{false_ty})) => na a)"
     let ncontra_ty = "forall A: Prop, (forall C: Prop, (A -> (A -> (\{false_ty})) -> C) -> C) -> (\{false_ty})"
     assert_type(ncontra, ncontra_ty)
   }
@@ -1364,7 +1363,7 @@ test "declarations" {
     #|  | intro : forall x : A, (forall y : A, ord y x -> Acc A ord y) -> Acc A ord x
 
     #|def well_founded_ord : forall A : Type, (A -> A -> Prop) -> (A -> Prop) :=
-    #|  fun A : Type => fun ord : A -> A -> Prop => fun x : A => Acc A ord x
+    #|  fun (A : Type) (ord : A -> A -> Prop) (x : A) => Acc A ord x
   ))
 }
 
@@ -1429,10 +1428,10 @@ test "recursor" {
     assert_ok(
       list_ind + "\n" + (
       #|def List.len : forall A : Type, List A -> Nat :=
-      #|  fun A : Type =>
+      #|  fun (A : Type) =>
       #|  List.rec A (fun _ : List A => Nat)
       #|    Nat.zero
-      #|    (fun h : A => fun tl : List A => fun ih : Nat => Nat.succ ih)
+      #|    (fun (h : A) (tl : List A) (ih : Nat) => Nat.succ ih)
     ))
   }
 
@@ -1565,12 +1564,12 @@ test "recursor" {
     #|inductive Pair (A : Type) (B : Type) : Type
     #|  | mk : A -> B -> Pair A B
     #|
-    #|def Pair.fst : forall A : Type, forall B : Type, Pair A B -> A :=
-    #|  fun A : Type => fun B : Type =>
+    #|def Pair.fst : forall (A : Type) (B : Type), Pair A B -> A :=
+    #|  fun (A : Type) (B : Type) =>
     #|    Pair.rec A B (fun _ : Pair A B => A) (fun a : A => fun b : B => a)
     #|
-    #|def Pair.snd : forall A : Type, forall B : Type, Pair A B -> B :=
-    #|  fun A : Type => fun B : Type =>
+    #|def Pair.snd : forall (A : Type) (B : Type), Pair A B -> B :=
+    #|  fun (A : Type) (B : Type) =>
     #|    Pair.rec A B (fun _ : Pair A B => B) (fun a : A => fun b : B => b)
   ))
 }
@@ -1582,7 +1581,7 @@ test "iota reduction" {
     let nf_elab = elab_term(nf, ctx=Some(ctx)).1
     let result = ctx.normalise(term_elab)
 
-    if !result.alpha_eq(nf_elab) {
+    if !result.is_alpha_eq(nf_elab) {
       fail("Expected normal form of '\{term}' to be '\{nf}', got '\{result}'")
     }
   }
@@ -1607,19 +1606,19 @@ test "iota reduction" {
     "\{pred} (Nat.succ Nat.zero)",
     "Nat.zero"
   )
-  
+
   assert_nf(
     "\{pred} (Nat.succ (Nat.succ Nat.zero))",
     "Nat.succ Nat.zero"
   )
 
-  let nat_id = "Nat.rec (fun _ : Nat => Nat) Nat.zero (fun n : Nat => fun ih : Nat => Nat.succ ih)"
+  let nat_id = "Nat.rec (fun _ : Nat => Nat) Nat.zero (fun (n : Nat) (ih : Nat) => Nat.succ ih)"
   assert_nf("\{nat_id} Nat.zero", "Nat.zero")
   assert_nf("\{nat_id} (Nat.succ Nat.zero)", "Nat.succ Nat.zero")
   let three = "Nat.succ (Nat.succ (Nat.succ Nat.zero))"
   assert_nf("\{nat_id} (\{three})", three)
 
-  let nat_add = "fun n : Nat => fun m : Nat => Nat.rec (fun _ : Nat => Nat) m (fun _ : Nat => fun ih : Nat => Nat.succ ih) n"
+  let nat_add = "fun (n : Nat) (m : Nat) => Nat.rec (fun _ : Nat => Nat) m (fun (_ : Nat) (ih : Nat) => Nat.succ ih) n"
   assert_nf("(\{nat_add}) Nat.zero Nat.zero", "Nat.zero")
   let two = "Nat.succ (Nat.succ Nat.zero)"
   let five = "Nat.succ (Nat.succ (Nat.succ (Nat.succ (Nat.succ Nat.zero))))"
@@ -1633,14 +1632,14 @@ test "iota reduction" {
 
   assert_nf_with_program(
     list_program,
-    "List.rec Bool (fun _ : List Bool => Nat) Nat.zero (fun h : Bool => fun tl : List Bool => fun ih : Nat => Nat.succ ih) (List.nil Bool)",
+    "List.rec Bool (fun _ : List Bool => Nat) Nat.zero (fun (h : Bool) (tl : List Bool) (ih : Nat) => Nat.succ ih) (List.nil Bool)",
     "Nat.zero"
   )
 
   // len [true, false] = 2
   assert_nf_with_program(
     list_program,
-    "List.rec Bool (fun _ : List Bool => Nat) Nat.zero (fun h : Bool => fun tl : List Bool => fun ih : Nat => Nat.succ ih) (List.cons Bool true (List.cons Bool false (List.nil Bool)))",
+    "List.rec Bool (fun _ : List Bool => Nat) Nat.zero (fun (h : Bool) (tl : List Bool) (ih : Nat) => Nat.succ ih) (List.cons Bool true (List.cons Bool false (List.nil Bool)))",
     "Nat.succ (Nat.succ Nat.zero)"
   )
 
@@ -1652,14 +1651,14 @@ test "iota reduction" {
   // Pair.fst (Pair.mk true zero) => true
   assert_nf_with_program(
     pair_program,
-    "Pair.rec Bool Nat (fun _ : Pair Bool Nat => Bool) (fun a : Bool => fun b : Nat => a) (Pair.mk Bool Nat true Nat.zero)",
+    "Pair.rec Bool Nat (fun _ : Pair Bool Nat => Bool) (fun (a : Bool) (b : Nat) => a) (Pair.mk Bool Nat true Nat.zero)",
     "true"
   )
 
   // Pair.snd (Pair.mk true zero) => zero
   assert_nf_with_program(
     pair_program,
-    "Pair.rec Bool Nat (fun _ : Pair Bool Nat => Nat) (fun a : Bool => fun b : Nat => b) (Pair.mk Bool Nat true Nat.zero)",
+    "Pair.rec Bool Nat (fun _ : Pair Bool Nat => Nat) (fun (a : Bool) (b : Nat) => b) (Pair.mk Bool Nat true Nat.zero)",
     "Nat.zero"
   )
 
@@ -1681,10 +1680,10 @@ test "iota reduction" {
     #|def Tree.size : forall A : Type, Tree A -> Nat := fun A : Type =>
     #|  Tree.rec A (fun _ : Tree A => Nat)
     #|    (fun _ : A => Nat.succ Nat.zero)
-    #|    (fun l : Tree A => fun r : Tree A => fun lih : Nat => fun rih : Nat =>
+    #|    (fun (l : Tree A) (r : Tree A) (lih : Nat) (rih : Nat) =>
     #|      Nat.rec (fun _ : Nat => Nat)
     #|        rih
-    #|        (fun _ : Nat => fun ih : Nat => Nat.succ ih) lih
+    #|        (fun (_ : Nat) (ih : Nat) => Nat.succ ih) lih
     #|    )
     
   assert_nf_with_program(
@@ -1702,8 +1701,8 @@ test "iota reduction" {
   {
     let program = (
       #|def Nat.add : Nat -> Nat -> Nat :=
-      #|  fun n : Nat => fun m : Nat =>
-      #|    Nat.rec (fun _ : Nat => Nat) m (fun _ : Nat => fun ih : Nat => Nat.succ ih) n
+      #|  fun (n : Nat) (m : Nat) =>
+      #|    Nat.rec (fun _ : Nat => Nat) m (fun (_ : Nat) (ih : Nat) => Nat.succ ih) n
       #|
       #|def three : Nat := Nat.succ (Nat.succ (Nat.succ Nat.zero))
       #|def five : Nat := Nat.succ (Nat.succ (Nat.succ (Nat.succ (Nat.succ Nat.zero))))
@@ -1722,7 +1721,7 @@ test "iota reduction" {
       #|def Nat.pred : Nat -> Nat :=
       #|  Nat.rec (fun _ : Nat => Nat)
       #|    Nat.zero
-      #|    (fun m : Nat => fun ih : Nat => m)
+      #|    (fun (m : Nat) (ih : Nat) => m)
     )
     
     let ctx = elab_program(program)
@@ -1730,7 +1729,7 @@ test "iota reduction" {
     let result = ctx.normalise(term)
     let expected = elab_term("Nat.succ (Nat.succ Nat.zero)", ctx=Some(ctx)).1
 
-    if !result.alpha_eq(expected) {
+    if !result.is_alpha_eq(expected) {
       fail("Expected Nat.pred 3 = 2, got '\{result}'")
     }
   }

@@ -18,17 +18,17 @@ pub type FreeVarId = UInt
 
 pub type UniverseLevel = UInt
 
-pub fn Term::alpha_eq(self: Term, other: Term) -> Bool {
+pub fn Term::is_alpha_eq(self: Term, other: Term) -> Bool {
   match (self, other) {
     (Sort(u1), Sort(u2)) => u1 == u2
     (Const(r1), Const(r2)) => r1 == r2
     (BoundVar(i), BoundVar(j)) => i == j
     (FreeVar(_, id1), FreeVar(_, id2)) => id1 == id2
-    (App(f, x), App(g, y)) => x.alpha_eq(y) && f.alpha_eq(g)
-    (Lam(_, t1, body1), Lam(_, t2, body2)) => t1.alpha_eq(t2) && body1.alpha_eq(body2)
-    (Pi(_, a1, b1), Pi(_, a2, b2)) => a1.alpha_eq(a2) && b1.alpha_eq(b2)
-    (Let(_, t1, body1), Let(_, t2, body2)) => t1.alpha_eq(t2) && body1.alpha_eq(body2)
-    (Ann(lhs1, ty1), (Ann(lhs2, ty2))) => ty1.alpha_eq(ty2) && lhs1.alpha_eq(lhs2)
+    (App(f, x), App(g, y)) => x.is_alpha_eq(y) && f.is_alpha_eq(g)
+    (Lam(_, t1, body1), Lam(_, t2, body2)) => t1.is_alpha_eq(t2) && body1.is_alpha_eq(body2)
+    (Pi(_, a1, b1), Pi(_, a2, b2)) => a1.is_alpha_eq(a2) && b1.is_alpha_eq(b2)
+    (Let(_, t1, body1), Let(_, t2, body2)) => t1.is_alpha_eq(t2) && body1.is_alpha_eq(body2)
+    (Ann(lhs1, ty1), (Ann(lhs2, ty2))) => ty1.is_alpha_eq(ty2) && lhs1.is_alpha_eq(lhs2)
     _ => false
   }
 }
@@ -210,15 +210,15 @@ test "show term" {
   assert_show_expr("(Type: Type 1)")
   assert_show_expr("((Bool: Type 1): Type 2)")
   // `->` is right-associative
-  assert_true(parse("fun A: Type => A -> (A -> A)").alpha_eq(parse("fun A: Type => A -> A -> A")))
+  assert_true(parse("fun A: Type => A -> (A -> A)").is_alpha_eq(parse("fun A: Type => A -> A -> A")))
   assert_show_expr("forall A: Prop, A -> A")
   assert_show_expr("forall A: Type 78, Bool")
   assert_show_expr("true")
   assert_show_expr("false")
-  assert_true(parse("Sort 0").alpha_eq(parse("Prop")))
-  assert_true(parse("Sort 1").alpha_eq(parse("Type")))
-  assert_true(parse("Sort 2").alpha_eq(parse("Type 1")))
-  assert_true(parse("Sort 3").alpha_eq(parse("Type 2")))
-  assert_true(parse("Type 0").alpha_eq(parse("Type")))
-  assert_true(parse("Type 1").alpha_eq(parse("Type 1")))
+  assert_true(parse("Sort 0").is_alpha_eq(parse("Prop")))
+  assert_true(parse("Sort 1").is_alpha_eq(parse("Type")))
+  assert_true(parse("Sort 2").is_alpha_eq(parse("Type 1")))
+  assert_true(parse("Sort 3").is_alpha_eq(parse("Type 2")))
+  assert_true(parse("Type 0").is_alpha_eq(parse("Type")))
+  assert_true(parse("Type 1").is_alpha_eq(parse("Type 1")))
 }
