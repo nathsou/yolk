@@ -12,42 +12,55 @@ pub enum STerm {
 pub enum Decl[T] {
   Axiom(T) // type
   Definition(T, T) // type, body
-  Inductive(
-    params~: Array[(String, T)],
-    constructors~: Array[(String, T)],
-    ty~: T,
-  )
+  Inductive(InductiveDecl[T])
   Constructor(
-    inductive_name~: Name,
+    ind~: InductiveDecl[T],
     ty~: T
   )
   Recursor(
-    ind_name~: Name,
+    ind~: InductiveDecl[T],
     num_params~: Int,
     num_indices~: Int,
     num_minors~: Int,
+    rules~: Array[RecRule],
     ty~: T,
   )
+} derive(Eq)
+
+pub struct InductiveDecl[T] {
+  params: Array[(String, T)]
+  constructors: Array[(String, T)]
+  ty: T
 } derive(Eq)
 
 pub fn[T] Decl::ty(self: Decl[T]) -> T {
   match self {
     Axiom(ty) => ty
     Definition(ty, _) => ty
-    Inductive(ty~, ..) => ty
+    Inductive({ ty, .. }) => ty
     Constructor(ty~, ..) => ty
     Recursor(ty~, ..) => ty
   }
 }
 
-pub fn Decl::inductive(params~: Array[(String, STerm)], arity~: STerm, constructors~: Array[(String, STerm)]) -> Decl[STerm] {
+pub struct RecRule {
+  ctor: Name
+  num_fields: Int
+  rec_fields: Array[Int]
+} derive(Eq)
+
+pub fn Decl::mk_inductive(
+  params~: Array[(String, STerm)],
+  arity~: STerm,
+  constructors~: Array[(String, STerm)],
+) -> Decl[STerm] {
   let mut ty = arity
 
   for param in params.rev_iter() {
     ty = Pi(Some(param.0), param.1, ty)
   }
 
-  Inductive(params~, constructors~, ty~)
+  Inductive({ params, constructors, ty })
 }
 
 pub enum TopLevel[T] {
@@ -84,6 +97,13 @@ pub fn Name::from(path: Array[String]) -> Name? {
     }
 
     Some(name)
+  }
+}
+
+pub fn Name::root(self: Name) -> String {
+  match self {
+    Leaf(root) => root
+    Path(lhs, _) => lhs.root()
   }
 }
 
@@ -169,7 +189,7 @@ pub impl[T: Show] Show for TopLevel[T] with output(self: TopLevel[T], logger: &L
       logger.write_string(" := ")
       logger.write_object(val)
     }
-    Declaration(name, Inductive(params=_, constructors~, ty~)) => {
+    Declaration(name, Inductive({ constructors, ty, .. })) => {
       logger.write_string("inductive ")
       logger.write_object(name)
       logger.write_string(" : ")
@@ -184,7 +204,7 @@ pub impl[T: Show] Show for TopLevel[T] with output(self: TopLevel[T], logger: &L
         logger.write_char('\n')
       }
     }
-    Declaration(name, Constructor(inductive_name=_, ty~)) => {
+    Declaration(name, Constructor(ind=_, ty~)) => {
       logger.write_string("constructor ")
       logger.write_object(name)
       logger.write_string(" : ")

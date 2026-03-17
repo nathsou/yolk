@@ -3,50 +3,6 @@ struct GlobalEnv {
   decls: Map[Name, Decl[Term]]
 }
 
-fn GlobalEnv::default() -> GlobalEnv raise {
-  let env: GlobalEnv = { decls: {} }
-  
-  env.add(Leaf("Bool"), Inductive(
-    params=[],
-    constructors=[
-      ("true", Const(Leaf("Bool"))),
-      ("false", Const(Leaf("Bool"))),
-    ],
-    ty=Sort(1),
-  ))
-
-  env.add(Leaf("true"), Constructor(
-    inductive_name=Leaf("Bool"),
-    ty=Const(Leaf("Bool")),
-  ))
-
-  env.add(Leaf("false"), Constructor(
-    inductive_name=Leaf("Bool"),
-    ty=Const(Leaf("Bool")),
-  ))
-  
-  env.add(Leaf("Nat"), Inductive(
-    params=[],
-    constructors=[
-      ("zero", Const(Leaf("Nat"))),
-      ("succ", Pi(None, Const(Leaf("Nat")), Const(Leaf("Nat")))),
-    ],
-    ty=Sort(1),
-  ))
-
-  env.add(Path(Leaf("Nat"), "zero"), Constructor(
-    inductive_name=Leaf("Nat"),
-    ty=Const(Leaf("Nat")),
-  ))
-
-  env.add(Path(Leaf("Nat"), "succ"), Constructor(
-    inductive_name=Leaf("Nat"),
-    ty=Pi(None, Const(Leaf("Nat")), Const(Leaf("Nat"))),
-  ))
-
-  env
-}
-
 fn GlobalEnv::add(self: GlobalEnv, name: Name, decl: Decl[Term]) -> Unit raise TypeCheckError {
   if self.decls.contains(name) {
     raise DuplicateDeclaration(name)
@@ -61,17 +17,64 @@ struct Context {
   env: GlobalEnv
 }
 
-pub fn Context::new() -> Context raise {
+pub fn Context::new() -> Context {
   let ctx: Context = {
-    env: GlobalEnv::default(),
+    env: { decls: {} },
     next_free_var_id: 0,
     free_vars: {},
   }
 
-  // Generate recursors for built-in inductive types
-  ctx.generate_recursor(Leaf("Bool"))
-  ctx.generate_recursor(Leaf("Nat"))
+  ctx.init_default_inductives()
+
   ctx
+}
+
+pub fn Context::init_default_inductives(self: Context) -> Unit {
+  let bool_ind: InductiveDecl[Term] = {
+    params: [],
+    constructors: [
+      ("true", Const(Leaf("Bool"))),
+      ("false", Const(Leaf("Bool"))),
+    ],
+    ty: Sort(1),
+  }
+  
+  try! self.env.add(Leaf("Bool"), Inductive(bool_ind))
+
+  try! self.env.add(Leaf("true"), Constructor(
+    ind=bool_ind,
+    ty=Const(Leaf("Bool")),
+  ))
+
+  try! self.env.add(Leaf("false"), Constructor(
+    ind=bool_ind,
+    ty=Const(Leaf("Bool")),
+  ))
+
+  let nat_ind: InductiveDecl[Term] = {
+    params: [],
+    constructors: [
+      ("zero", Const(Leaf("Nat"))),
+      ("succ", Pi(None, Const(Leaf("Nat")), Const(Leaf("Nat")))),
+    ],
+    ty: Sort(1),
+  }
+  
+  try! self.env.add(Leaf("Nat"), Inductive(nat_ind))
+
+  try! self.env.add(Path(Leaf("Nat"), "zero"), Constructor(
+    ind=nat_ind,
+    ty=Const(Leaf("Nat")),
+  ))
+
+  try! self.env.add(Path(Leaf("Nat"), "succ"), Constructor(
+    ind=nat_ind,
+    ty=Pi(None, Const(Leaf("Nat")), Const(Leaf("Nat"))),
+  ))
+
+  // Generate recursors for built-in inductive types
+  try! self.generate_recursor(Leaf("Bool"), bool_ind)
+  try! self.generate_recursor(Leaf("Nat"), nat_ind)
 }
 
 pub fn Context::add_decl(self: Context, name: Name, decl: Decl[Term]) -> Unit raise TypeCheckError {
@@ -96,7 +99,7 @@ fn Context::check_decl(self: Context, name: Name, decl: Decl[Term]) -> Unit rais
       let _ = ensure_sort("definition", ty)
       self.check(body, ty)
     }
-    Inductive(ty~, ..) => {
+    Inductive({ ty, .. }) => {
       let arity_tys = ty.collect_pi_types()
       if !(arity_tys.last() is Some(Sort(_))) {
         raise TypeError(ty, "Invalid type for inductive '\{name}': expected a Pi type ending in a sort, got '\{ty}'")
@@ -104,79 +107,76 @@ fn Context::check_decl(self: Context, name: Name, decl: Decl[Term]) -> Unit rais
     }
     // https://lean-lang.org/doc/reference/latest/The-Type-System/Inductive-Types/#well-formed-inductives  
     // https://ammkrn.github.io/type_checking_in_lean4/declarations/inductive.html#constructor
-    Constructor(inductive_name~, ty=ctor_ty) => {
-      if self.env.decls.get(inductive_name) is Some(Inductive(params~, ty=ind_ty, ..)) {
-        let _ = ensure_sort("constructor", ctor_ty)
-
-        let free_vars_to_remove: Array[FreeVarId] = []
-        defer {
-          for var_id in free_vars_to_remove {
-            self.free_vars.remove(var_id)
-          }
+    Constructor(ind={ params, ty: ind_ty, .. }, ty=ctor_ty) => {
+      let inductive_name = Leaf(name.root())
+      let _ = ensure_sort("constructor", ctor_ty)
+      let free_vars_to_remove: Array[FreeVarId] = []
+      
+      defer {
+        for var_id in free_vars_to_remove {
+          self.free_vars.remove(var_id)
         }
+      }
 
-        // Open the inductive type's params to establish param FreeVars and get the opened arity
-        let (param_vars, opened_arity) = self.open_binders(ind_ty, params.length(), free_vars_to_remove)
-        let arity_tys = opened_arity.collect_pi_types()
-        let ind_level = match arity_tys.last() {
-          Some(Sort(u)) => u
-          last => raise TypeError(ctor_ty, "Invalid constructor type for '\{name}': expected resulting type to be a sort, got '\{last}'")
-        }
+      // Open the inductive type's params to establish param FreeVars and get the opened arity
+      let (param_vars, opened_arity) = self.open_binders(ind_ty, params.length(), free_vars_to_remove)
+      let arity_tys = opened_arity.collect_pi_types()
+      let ind_level = match arity_tys.last() {
+        Some(Sort(u)) => u
+        last => raise TypeError(ctor_ty, "Invalid constructor type for '\{name}': expected resulting type to be a sort, got '\{last}'")
+      }
 
-        // 1. Strip params from the constructor type, reusing the inductive type's param FreeVars
-        let mut rem_ty = ctor_ty
-        for i in 0..<param_vars.length() {
-          match rem_ty {
-            Pi(_, a, b) => {
-              let { name: param_name, fvar: param_fvar, ty: param_ty } = param_vars[i]
-              if !self.is_def_eq(a, param_ty) {
-                raise TypeError(ctor_ty, "Constructor '\{name}' parameter type '\{a}' does not match inductive type '\{inductive_name}' parameter type '\{param_ty}'")
-              }
-              rem_ty = instantiate(b, 0, FreeVar(param_name, param_fvar))
+      // 1. Strip params from the constructor type, reusing the inductive type's param FreeVars
+      let mut rem_ty = ctor_ty
+      for i in 0..<param_vars.length() {
+        match rem_ty {
+          Pi(_, a, b) => {
+            let { name: param_name, fvar: param_fvar, ty: param_ty } = param_vars[i]
+            if !self.is_def_eq(a, param_ty) {
+              raise TypeError(ctor_ty, "Constructor '\{name}' parameter type '\{a}' does not match inductive type '\{inductive_name}' parameter type '\{param_ty}'")
             }
-            _ => raise TypeError(ctor_ty, "Constructor '\{name}' has too few parameters compared to inductive type '\{inductive_name}'")
+            rem_ty = instantiate(b, 0, FreeVar(param_name, param_fvar))
           }
+          _ => raise TypeError(ctor_ty, "Constructor '\{name}' has too few parameters compared to inductive type '\{inductive_name}'")
         }
+      }
 
-        // 2-4. Check non-parameter constructor arguments
-        let mut arg_idx = 0
-        while rem_ty is Pi(x, arg_ty, rest) {
-          let s = self.infer(arg_ty)
-          if self.whnf(s) is Sort(u) {
-            if ind_level > 0 && u > ind_level {
-              raise TypeError(
-                ctor_ty,
-                (
-                  #|Invalid universe level in constructor '\{name}':
-                  #|Parameter has type '\{arg_ty}' at universe level '\{u}' which is not less than or equal to the inductive type's resulting universe level '\{ind_level}'")
-                )
+      // 2-4. Check non-parameter constructor arguments
+      let mut arg_idx = 0
+      while rem_ty is Pi(x, arg_ty, rest) {
+        let s = self.infer(arg_ty)
+        if self.whnf(s) is Sort(u) {
+          if ind_level > 0 && u > ind_level {
+            raise TypeError(
+              ctor_ty,
+              (
+                #|Invalid universe level in constructor '\{name}':
+                #|Parameter has type '\{arg_ty}' at universe level '\{u}' which is not less than or equal to the inductive type's resulting universe level '\{ind_level}'")
               )
-            }
-
-            if !self.is_strictly_positive(arg_ty, inductive_name) {
-              raise TypeError(ctor_ty, "Constructor '\{name}' has a non strictly-positive occurrence of the inductive type being declared in argument #\{arg_idx + 1}")
-            }
-
-            rem_ty = if x is Some(x) {
-              let fresh_x = self.declare_fresh(arg_ty)
-              free_vars_to_remove.push(fresh_x)
-              open(rest, 0, x, fresh_x)
-            } else {
-              rest
-            }
-          } else {
-            raise TypeError(ctor_ty, "Constructor '\{name}' has non-type parameter '\{arg_ty}'")
+            )
           }
 
-          arg_idx += 1
+          if !self.is_strictly_positive(arg_ty, inductive_name) {
+            raise TypeError(ctor_ty, "Constructor '\{name}' has a non strictly-positive occurrence of the inductive type being declared in argument #\{arg_idx + 1}")
+          }
+
+          rem_ty = if x is Some(x) {
+            let fresh_x = self.declare_fresh(arg_ty)
+            free_vars_to_remove.push(fresh_x)
+            open(rest, 0, x, fresh_x)
+          } else {
+            rest
+          }
+        } else {
+          raise TypeError(ctor_ty, "Constructor '\{name}' has non-type parameter '\{arg_ty}'")
         }
 
-        // 5. Check return type is a valid application of the inductive type
-        if !self.is_valid_inductive_app(rem_ty, inductive_name, param_vars, arity_tys) {
-          raise TypeError(ctor_ty, "Constructor '\{name}' has invalid resulting type '\{rem_ty}', expected an application of the inductive type being declared to its parameters")
-        }
-      } else {
-        raise TypeError(ctor_ty, "Constructor '\{name}' refers to unknown inductive type '\{inductive_name}'")
+        arg_idx += 1
+      }
+
+      // 5. Check return type is a valid application of the inductive type
+      if !self.is_valid_inductive_app(rem_ty, inductive_name, param_vars, arity_tys) {
+        raise TypeError(ctor_ty, "Constructor '\{name}' has invalid resulting type '\{rem_ty}', expected an application of the inductive type being declared to its parameters")
       }
     }
     Recursor(..) => {
@@ -187,7 +187,7 @@ fn Context::check_decl(self: Context, name: Name, decl: Decl[Term]) -> Unit rais
 
 // Given a term and an inductive name + param FreeVars, check if the term is
 // an application of `I param_fvars... indices...`. If so, return Some(indices).
-fn is_ind_app(term: Term, ind_name: Name, param_vars: Array[OpenedBinder]) -> Array[Term]? {
+fn is_ind_app(term: Term, ind_name: Name, param_vars: Array[OpenedBinder]) -> ArrayView[Term]? {
   let (head, args) = term.collect_app_args()
   let n_params = param_vars.length()
 
@@ -205,7 +205,7 @@ fn is_ind_app(term: Term, ind_name: Name, param_vars: Array[OpenedBinder]) -> Ar
         }
       }
 
-      Some(args[n_params:].to_array())
+      Some(args[n_params:])
     }
     _ => None
   }
@@ -227,7 +227,7 @@ fn mk_ind_app(ind_name: Name, param_vars: Array[OpenedBinder], extra_args: Array
 }
 
 // Build a term representing `f args...`
-fn mk_app(f: Term, args: Array[Term]) -> Term {
+fn mk_app(f: Term, args: Iter[Term]) -> Term {
   let mut result = f
 
   for a in args {
@@ -249,11 +249,8 @@ fn close_pi(body: Term, name: String, fvar_id: FreeVarId, fvar_ty: Term) -> Term
 }
 
 /// Generate a recursor declaration for the given inductive type and add it to the environment.
-fn Context::generate_recursor(self: Context, ind_name: Name) -> Unit raise TypeCheckError {
-  let (params, ind_ty, constructors) = match self.env.decls.get(ind_name) {
-    Some(Inductive(params~, ty~, constructors~)) => (params, ty, constructors)
-    _ => raise TypeError(Const(ind_name), "Cannot generate recursor for '\{ind_name}': not an inductive type")
-  }
+fn Context::generate_recursor(self: Context, ind_name: Name, ind: InductiveDecl[Term]) -> Unit raise TypeCheckError {
+  let { params, ty: ind_ty, constructors } = ind
   let num_params = params.length()
   let cleanup: Array[FreeVarId] = []
 
@@ -312,6 +309,7 @@ fn Context::generate_recursor(self: Context, ind_name: Name) -> Unit raise TypeC
 
   // 6. For each constructor, build its minor premise type
   let minor_vars: Array[OpenedBinder] = []
+  let rec_rules: Array[RecRule] = []
   for ctor in constructors {
     let (ctor_name, ctor_ty) = ctor
     let minor_cleanup: Array[FreeVarId] = []
@@ -369,10 +367,12 @@ fn Context::generate_recursor(self: Context, ind_name: Name) -> Unit raise TypeC
 
     // Build IH (inductive hypothesis) FreeVars for recursive arguments
     let ih_vars: Array[OpenedBinder] = []
-    for a in ctor_arg_vars {
+    let rec_field_indices: Array[Int] = []
+    for i, a in ctor_arg_vars {
       if is_ind_app(a.ty, ind_name, param_vars) is Some(rec_indices) {
+        rec_field_indices.push(i)
         // IH type: C rec_indices... a_fvar
-        let ih_ty = mk_app(motive_fvar, rec_indices)
+        let ih_ty = mk_app(motive_fvar, rec_indices.iter())
         let ih_ty = Term::App(ih_ty, FreeVar(a.name, a.fvar))
         let ih_name = "\{a.name}_ih"
         let ih_fvar = self.declare_fresh(ih_ty)
@@ -383,7 +383,7 @@ fn Context::generate_recursor(self: Context, ind_name: Name) -> Unit raise TypeC
     }
 
     // Minor premise result: C ctor_indices... ctor_app
-    let mut minor_result = mk_app(motive_fvar, ctor_indices)
+    let mut minor_result = mk_app(motive_fvar, ctor_indices.iter())
     minor_result = App(minor_result, ctor_app)
 
     // Close IH vars, then ctor_arg vars
@@ -396,6 +396,9 @@ fn Context::generate_recursor(self: Context, ind_name: Name) -> Unit raise TypeC
       let a = ctor_arg_vars[i]
       minor_result = close_pi(minor_result, a.name, a.fvar, a.ty)
     }
+
+    // Record the RecRule for this constructor
+    rec_rules.push({ ctor: ctor_full_name, num_fields: ctor_arg_vars.length(), rec_fields: rec_field_indices })
 
     // Declare the minor premise FreeVar
     let minor_fvar = self.declare_fresh(minor_result)
@@ -410,7 +413,7 @@ fn Context::generate_recursor(self: Context, ind_name: Name) -> Unit raise TypeC
   let major_fvar_name = "major"
   let major_fvar = FreeVar(major_fvar_name, major_fvar_id)
 
-  let mut rec_result = mk_app(motive_fvar, index_fvar_terms)
+  let mut rec_result = mk_app(motive_fvar, index_fvar_terms.iter())
   rec_result = App(rec_result, major_fvar)
 
   // Close from inside out: major → indices → minors → motive → params
@@ -433,11 +436,12 @@ fn Context::generate_recursor(self: Context, ind_name: Name) -> Unit raise TypeC
 
   // 8. Add to the environment
   self.env.add(Path(ind_name, "rec"), Recursor(
-    ind_name~,
+    ind~,
     ty=rec_result,
     num_params~,
     num_indices~,
     num_minors=constructors.length(),
+    rules=rec_rules,
   ))
 }
 
@@ -584,7 +588,14 @@ fn Context::normalise(self: Context, term: Term) -> Term raise TypeCheckError {
 
       match lhs_norm {
         Lam(_, _, body) => self.normalise(instantiate(body, 0, rhs_norm))
-        _ => App(lhs_norm, rhs_norm)
+        _ => {
+          let result = Term::App(lhs_norm, rhs_norm)
+          let (head, args) = result.collect_app_args()
+          match self.try_iota_reduce(head, args) {
+            Some(reduced) => self.normalise(reduced)
+            None => result
+          }
+        }
       }
     }
     Lam(x, ty, body) => {
@@ -628,6 +639,127 @@ fn Context::normalise(self: Context, term: Term) -> Term raise TypeCheckError {
   }
 }
 
+// Extract indices from a term of the form `I params... idx1 ... idxN`
+fn extract_indices(term: Term, ind_name: Name, num_params: Int) -> ArrayView[Term]? {
+  let (head, args) = term.collect_app_args()
+
+  if head is Const(c) && c == ind_name && args.length() >= num_params {
+    Some(args[num_params:])
+  } else {
+    None
+  }
+}
+
+// Try iota reduction: if head is a recursor and the major premise reduces to a constructor, fire the rule
+fn Context::try_iota_reduce(self: Context, head: Term, args: ArrayView[Term]) -> Term? {
+  let rec_name = if head is Const(name) { name } else { return None }
+  let ind_name = Leaf(rec_name.root())
+  let (ind, num_params, num_indices, num_minors, rules) = match self.env.decls.get(rec_name) {
+    Some(Recursor(ind~, num_params~, num_indices~, num_minors~, rules~, ..)) =>
+      (ind, num_params, num_indices, num_minors, rules)
+    _ => return None
+  }
+
+  // Total expected args: params + motive + minors + indices + major
+  let total_args = num_params + 1 + num_minors + num_indices + 1
+  if args.length() < total_args {
+    return None
+  }
+
+  // Decompose args
+  let params = args[0:num_params]
+  // motive at args[num_params]
+  let minors = args[num_params + 1 : num_params + 1 + num_minors]
+  // indices at args[num_params + 1 + num_minors : num_params + 1 + num_minors + num_indices]
+  let major_idx = num_params + 1 + num_minors + num_indices
+  let major = args[major_idx]
+  let extra = args[major_idx + 1:]
+
+  // WHNF the major premise to expose the constructor
+  let major_whnf = self.whnf(major)
+  let (ctor_head, ctor_args) = major_whnf.collect_app_args()
+  let ctor_name = if ctor_head is Const(c) { c } else { return None }
+
+  // Find which rule (constructor) this matches
+  let rule_index = match rules.search_by(r => r.ctor == ctor_name) {
+    Some(i) => i
+    None => return None
+  }
+
+  let rule = rules[rule_index]
+
+  // Extract constructor fields (skip params)
+  let fields = ctor_args[num_params:]
+
+  // Build the result: apply minor to fields and IHs
+  let mut result = minors[rule_index]
+
+  // To compute IH indices for recursive fields, we need to walk the constructor type
+  // and instantiate params + prior fields to get each field's type
+  let (_, ctor_ty) = ind.constructors[rule_index]
+
+  // Instantiate params into constructor type
+  let num_p = num_params
+  let mut ctor_remaining = ctor_ty
+  for i in 0..<num_p {
+    ctor_remaining = instantiate(ctor_remaining, i.reinterpret_as_uint(), params[num_p - 1 - i])
+  }
+
+  // First pass: apply all fields to the minor, and collect IH terms for recursive fields
+  let ih_terms: Array[Term] = []
+  for k in 0..<rule.num_fields {
+    result = App(result, fields[k])
+
+    if rule.rec_fields.contains(k) {
+      // Get the field's type from ctor_remaining to extract IH indices
+      let field_ty = if ctor_remaining is Pi(_, a, _) { a } else { return None }
+      let ih_indices = match extract_indices(field_ty, ind_name, num_params) {
+        Some(idxs) => idxs
+        None => return None
+      }
+
+      // Build IH: rec_name params... motive minors... ih_indices... field
+      let mut ih = Const(rec_name)
+      for p in params {
+        ih = App(ih, p)
+      }
+
+      ih = App(ih, args[num_params]) // motive
+      for m in minors {
+        ih = App(ih, m)
+      }
+
+      for idx in ih_indices {
+        ih = App(ih, idx)
+      }
+
+      ih = App(ih, fields[k])
+      ih_terms.push(ih)
+    }
+
+    // Advance ctor_remaining by substituting this field into the Pi body
+    if ctor_remaining is Pi(x, _, b) {
+      ctor_remaining = if x is Some(_) {
+        instantiate(b, 0, fields[k])
+      } else {
+        b
+      }
+    }
+  }
+
+  // Second pass: apply all IH terms
+  for ih in ih_terms {
+    result = App(result, ih)
+  }
+
+  // Re-apply excess args
+  for a in extra {
+    result = App(result, a)
+  }
+
+  Some(result)
+}
+
 // Weak Head Normal Form: only reduce the head of the term, and do not recurse under binders
 pub fn Context::whnf(self: Context, term: Term) -> Term {
   match term {
@@ -636,7 +768,14 @@ pub fn Context::whnf(self: Context, term: Term) -> Term {
       let f_whnf = self.whnf(f)
       match f_whnf {
         Lam(_, _, body) => self.whnf(instantiate(body, 0, arg))
-        _ => App(f_whnf, arg)
+        _ => {
+          let result = Term::App(f_whnf, arg)
+          let (head, args) = result.collect_app_args()
+          match self.try_iota_reduce(head, args) {
+            Some(reduced) => self.whnf(reduced)
+            None => result
+          }
+        }
       }
     }
     Let(_, val, body) => {
@@ -646,12 +785,9 @@ pub fn Context::whnf(self: Context, term: Term) -> Term {
     Const(name) => {
       if self.env.decls.get(name) is Some(decl) {
         match decl {
-          Axiom(_) => term
           // delta reduction
           Definition(_, body) => self.whnf(body)
-          Inductive(_) => term
-          Constructor(_) => term
-          Recursor(_) => term // TODO: iota reduction
+          Axiom(_) | Inductive(_) | Constructor(_) | Recursor(_) => term
         }
       } else {
         Const(name)
@@ -719,7 +855,7 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
           Axiom(ty) => ty
           // we already checked that the environment is well-formed
           Definition(ty, _) => ty
-          Inductive(ty~, ..) => ty
+          Inductive({ ty, .. }) => ty
           Constructor(ty~, ..) => ty
           Recursor(ty~, ..) => ty
         }
@@ -847,23 +983,26 @@ pub fn Context::is_def_eq(self: Context, term: Term, expected: Term) -> Bool rai
     }
   }
 }
-
-fn elab_term(term: String) -> (Context, Term) raise {
+    
+fn elab_term(term: String, ctx~: Context? = None) -> (Context, Term) raise {
   let s_term = Parser::new(Lexer::new(term).tokenise()).parse_term()
-  let elab = Elaborator::new()
+  let elab = match ctx {
+    Some(ctx) => Elaborator::from(ctx)
+    None => Elaborator::new()
+  }
   let term_elab = elab.elaborate_term(s_term)
   (elab.ctx, term_elab)
 }
 
-test "normalisation" {
-  fn assert_nf(term: String, nf: String) -> Unit raise {
-    let (ctx, term_elab) = elab_term(term)
-    let (_, nf_elab) = elab_term(nf)
-    if !ctx.normalise(term_elab).alpha_eq(nf_elab) {
-      fail("Expected normal form of '\{term}' to be '\{nf}', got '\{ctx.normalise(term_elab)}'")
-    }
+fn assert_nf(term: String, nf: String) -> Unit raise {
+  let (ctx, term_elab) = elab_term(term)
+  let (_, nf_elab) = elab_term(nf, ctx=Some(ctx))
+  if !ctx.normalise(term_elab).alpha_eq(nf_elab) {
+    fail("Expected normal form of '\{term}' to be '\{nf}', got '\{ctx.normalise(term_elab)}'")
   }
+}
 
+test "normalisation" {
   assert_nf("Type", "Type")
   assert_nf("Type 1", "Type 1")
   assert_nf("fun x: Bool => x", "fun x: Bool => x")
@@ -1042,15 +1181,14 @@ test "type checking" {
     assert_type(ncontra, ncontra_ty)
   }
 }
+fn elab_program(program: String) -> Context raise {
+  let prog = Parser::new(Lexer::new(program).tokenise()).parse()
+  let elab = Elaborator::new()
+  elab.elaborate(prog)
+  elab.ctx
+}
 
 test "declarations" {
-  fn elab_program(program: String) -> Context raise {
-    let prog = Parser::new(Lexer::new(program).tokenise()).parse()
-    let elab = Elaborator::new()
-    elab.elaborate(prog)
-    elab.ctx
-  }
-
   fn assert_ok(program: String) -> Unit raise {
     try elab_program(program) |> ignore catch {
       err => {
@@ -1231,13 +1369,6 @@ test "declarations" {
 }
 
 test "recursor" {
-  fn elab_program(program: String) -> Context raise {
-    let prog = Parser::new(Lexer::new(program).tokenise()).parse()
-    let elab = Elaborator::new()
-    elab.elaborate(prog)
-    elab.ctx
-  }
-
   fn assert_ok(program: String) -> Unit raise {
     try elab_program(program) |> ignore catch {
       err => fail("Invalid program: '\{err}'\n\{program}")
@@ -1255,8 +1386,7 @@ test "recursor" {
   fn assert_has_type(program: String, name: String, expected_ty: String) -> Unit raise {
     let ctx = elab_program(program)
     // Elaborate the expected type in the same context (so user-defined types are available)
-    let elab = Elaborator::new_with_ctx(ctx)
-    let expected = elab.elaborate_term(Parser::new(Lexer::new(expected_ty).tokenise()).parse_term())
+    let expected = elab_term(expected_ty, ctx=Some(ctx)).1
     let name_parsed = Parser::new(Lexer::new(name).tokenise()).parse_name()
     match ctx.env.decls.get(name_parsed) {
       Some(decl) => {
@@ -1443,4 +1573,165 @@ test "recursor" {
     #|  fun A : Type => fun B : Type =>
     #|    Pair.rec A B (fun _ : Pair A B => B) (fun a : A => fun b : B => b)
   ))
+}
+
+test "iota reduction" {
+  fn assert_nf_with_program(program: String, term: String, nf: String) -> Unit raise {
+    let ctx = elab_program(program)
+    let term_elab = elab_term(term, ctx=Some(ctx)).1
+    let nf_elab = elab_term(nf, ctx=Some(ctx)).1
+    let result = ctx.normalise(term_elab)
+
+    if !result.alpha_eq(nf_elab) {
+      fail("Expected normal form of '\{term}' to be '\{nf}', got '\{result}'")
+    }
+  }
+
+  assert_nf(
+    "Bool.rec (fun _ : Bool => Bool) false true true",
+    "false"
+  )
+
+  assert_nf(
+    "Bool.rec (fun _ : Bool => Bool) false true false",
+    "true"
+  )
+
+  assert_nf(
+    "Nat.rec (fun _ : Nat => Nat) Nat.zero (fun m : Nat => fun ih : Nat => m) Nat.zero",
+    "Nat.zero"
+  )
+
+  let pred = "Nat.rec (fun _ : Nat => Nat) Nat.zero (fun m : Nat => fun ih : Nat => m)"
+  assert_nf(
+    "\{pred} (Nat.succ Nat.zero)",
+    "Nat.zero"
+  )
+  
+  assert_nf(
+    "\{pred} (Nat.succ (Nat.succ Nat.zero))",
+    "Nat.succ Nat.zero"
+  )
+
+  let nat_id = "Nat.rec (fun _ : Nat => Nat) Nat.zero (fun n : Nat => fun ih : Nat => Nat.succ ih)"
+  assert_nf("\{nat_id} Nat.zero", "Nat.zero")
+  assert_nf("\{nat_id} (Nat.succ Nat.zero)", "Nat.succ Nat.zero")
+  let three = "Nat.succ (Nat.succ (Nat.succ Nat.zero))"
+  assert_nf("\{nat_id} (\{three})", three)
+
+  let nat_add = "fun n : Nat => fun m : Nat => Nat.rec (fun _ : Nat => Nat) m (fun _ : Nat => fun ih : Nat => Nat.succ ih) n"
+  assert_nf("(\{nat_add}) Nat.zero Nat.zero", "Nat.zero")
+  let two = "Nat.succ (Nat.succ Nat.zero)"
+  let five = "Nat.succ (Nat.succ (Nat.succ (Nat.succ (Nat.succ Nat.zero))))"
+  assert_nf("(\{nat_add}) (\{two}) (\{three})", five)
+
+  let list_program = (
+    #|inductive List (A : Type) : Type
+    #|  | nil : List A
+    #|  | cons : A -> List A -> List A
+  )
+
+  assert_nf_with_program(
+    list_program,
+    "List.rec Bool (fun _ : List Bool => Nat) Nat.zero (fun h : Bool => fun tl : List Bool => fun ih : Nat => Nat.succ ih) (List.nil Bool)",
+    "Nat.zero"
+  )
+
+  // len [true, false] = 2
+  assert_nf_with_program(
+    list_program,
+    "List.rec Bool (fun _ : List Bool => Nat) Nat.zero (fun h : Bool => fun tl : List Bool => fun ih : Nat => Nat.succ ih) (List.cons Bool true (List.cons Bool false (List.nil Bool)))",
+    "Nat.succ (Nat.succ Nat.zero)"
+  )
+
+  let pair_program = (
+    #|inductive Pair (A : Type) (B : Type) : Type
+    #|  | mk : A -> B -> Pair A B
+  )
+
+  // Pair.fst (Pair.mk true zero) => true
+  assert_nf_with_program(
+    pair_program,
+    "Pair.rec Bool Nat (fun _ : Pair Bool Nat => Bool) (fun a : Bool => fun b : Nat => a) (Pair.mk Bool Nat true Nat.zero)",
+    "true"
+  )
+
+  // Pair.snd (Pair.mk true zero) => zero
+  assert_nf_with_program(
+    pair_program,
+    "Pair.rec Bool Nat (fun _ : Pair Bool Nat => Nat) (fun a : Bool => fun b : Nat => b) (Pair.mk Bool Nat true Nat.zero)",
+    "Nat.zero"
+  )
+
+  // False.rec: stuck (no constructor), normalises to itself
+  {
+    let false_program = "inductive False : Prop"
+    let ctx = elab_program(false_program)
+    let term = elab_term("fun P : Prop => False.rec (fun _ : False => P)", ctx=Some(ctx)).1
+    // Should not crash
+    let _ = ctx.normalise(term)
+  }
+
+  // Tree: two recursive arguments
+  let tree_program =
+    #|inductive Tree (A : Type) : Type
+    #|  | leaf : A -> Tree A
+    #|  | node : Tree A -> Tree A -> Tree A
+    #|
+    #|def Tree.size : forall A : Type, Tree A -> Nat := fun A : Type =>
+    #|  Tree.rec A (fun _ : Tree A => Nat)
+    #|    (fun _ : A => Nat.succ Nat.zero)
+    #|    (fun l : Tree A => fun r : Tree A => fun lih : Nat => fun rih : Nat =>
+    #|      Nat.rec (fun _ : Nat => Nat)
+    #|        rih
+    #|        (fun _ : Nat => fun ih : Nat => Nat.succ ih) lih
+    #|    )
+    
+  assert_nf_with_program(
+    tree_program,
+    "Tree.size Bool (Tree.leaf Bool true)",
+    "Nat.succ Nat.zero"
+  )
+
+  assert_nf_with_program(
+    tree_program,
+    "Tree.size Nat (Tree.node Nat (Tree.leaf Nat Nat.zero) (Tree.leaf Nat (Nat.succ Nat.zero)))",
+    "Nat.succ (Nat.succ Nat.zero)"
+  )
+
+  {
+    let program = (
+      #|def Nat.add : Nat -> Nat -> Nat :=
+      #|  fun n : Nat => fun m : Nat =>
+      #|    Nat.rec (fun _ : Nat => Nat) m (fun _ : Nat => fun ih : Nat => Nat.succ ih) n
+      #|
+      #|def three : Nat := Nat.succ (Nat.succ (Nat.succ Nat.zero))
+      #|def five : Nat := Nat.succ (Nat.succ (Nat.succ (Nat.succ (Nat.succ Nat.zero))))
+      #|
+      #|def Bool.not : Bool -> Bool :=
+      #|  Bool.rec (fun _ : Bool => Bool) false true
+    )
+
+    try elab_program(program) |> ignore catch {
+      err => fail("Invalid program: '\{err}'\n\{program}")
+    }
+  }
+
+  {
+    let program = (
+      #|def Nat.pred : Nat -> Nat :=
+      #|  Nat.rec (fun _ : Nat => Nat)
+      #|    Nat.zero
+      #|    (fun m : Nat => fun ih : Nat => m)
+    )
+    
+    let ctx = elab_program(program)
+    let term = elab_term("Nat.pred (Nat.succ (Nat.succ (Nat.succ Nat.zero)))", ctx=Some(ctx)).1
+    let result = ctx.normalise(term)
+    let expected = elab_term("Nat.succ (Nat.succ Nat.zero)", ctx=Some(ctx)).1
+
+    if !result.alpha_eq(expected) {
+      fail("Expected Nat.pred 3 = 2, got '\{result}'")
+    }
+  }
 }

@@ -104,4 +104,48 @@ def List.len : forall A : Type, List A -> Nat :=
       Nat.zero
       (fun h : A => fun tl : List A => fun ih : Nat => Nat.succ ih)
 
-#check List.len Nat (List.cons Nat Nat.zero (List.cons Nat one (List.cons Nat two (List.cons Nat three (List.nil Nat)))))
+#eval List.len Nat (List.cons Nat Nat.zero (List.cons Nat one (List.cons Nat two (List.cons Nat three (List.nil Nat)))))
+
+def Nat.add : Nat -> Nat -> Nat :=
+  fun n : Nat => fun m : Nat =>
+    Nat.rec (fun _ : Nat => Nat) m (fun _ : Nat => fun ih : Nat => Nat.succ ih) n
+
+def five : Nat := Nat.add two three
+#eval five
+
+def Bool.not : Bool -> Bool :=
+  Bool.rec (fun _ : Bool => Bool) false true
+
+#eval Pair.mk Bool Bool (Bool.not true) (Bool.not false)
+
+def Nat.mul : Nat -> Nat -> Nat :=
+  fun m : Nat =>
+    Nat.rec (fun _ : Nat => Nat)
+      Nat.zero
+      (fun _ : Nat => fun ih : Nat => Nat.add m ih)
+
+#eval Nat.mul three two
+
+#eval Pair.fst Bool Nat pair
+#eval Pair.snd Bool Nat pair
+
+#eval Nat.pred three
+
+#eval (
+  let lst := List.cons Nat one (List.cons Nat two (List.cons Nat three (List.nil Nat))) in
+  List.len Nat lst
+)
+
+def Tree.size : forall A : Type, Tree A -> Nat := fun A : Type =>
+  Tree.rec A (fun _ : Tree A => Nat)
+    (fun _ : A => Nat.succ Nat.zero)
+    (fun l : Tree A => fun r : Tree A => fun lih : Nat => fun rih : Nat =>
+      Nat.rec (fun _ : Nat => Nat)
+        rih
+        (fun _ : Nat => fun ih : Nat => Nat.succ ih) lih
+    )
+
+#eval (
+  let tree := Tree.node Nat (Tree.leaf Nat one) (Tree.node Nat (Tree.leaf Nat two) (Tree.leaf Nat three)) in
+  Tree.size Nat tree
+)

@@ -344,7 +344,7 @@ fn Parser::parse_inductive(self: Parser) -> TopLevel[STerm] raise ParserError {
     constructors.push((ctor_name, ctor_ty))
   }
 
-  Declaration(name, Decl::inductive(params~, arity~, constructors~))
+  Declaration(name, Decl::mk_inductive(params~, arity~, constructors~))
 }
 
 fn Parser::parse_command(self: Parser) -> TopLevel[STerm] raise ParserError {
@@ -557,12 +557,12 @@ test "parser" {
   
   expect_top_level(
     "inductive False : Prop",
-    Declaration(Leaf("False"), Inductive(params=[], constructors=[], ty=Sort(0)))
+    Declaration(Leaf("False"), Inductive({params: [], constructors: [], ty: Sort(0)}))
   )
 
   expect_top_level(
     "inductive True : Prop | intro : True",
-    Declaration(Leaf("True"), Inductive(params=[], constructors=[("intro", v("True"))], ty=Sort(0)))
+    Declaration(Leaf("True"), Inductive({params: [], constructors: [("intro", v("True"))], ty: Sort(0)}))
   )
 
   expect_top_level(
@@ -573,14 +573,14 @@ test "parser" {
     ),
     Declaration(
       Leaf("Vec"),
-      Inductive(
-        params=[("A", Sort(1))],
-        constructors=[
+      Inductive({
+        params: [("A", Sort(1))],
+        constructors: [
           ("nil", App(App(v("Vec"), v("A")), Var(Path(Leaf("Nat"), "zero")))),
           ("cons", Pi(None, v("A"), Pi(Some("n"), v("Nat"), Pi(None, App(App(v("Vec"), v("A")), v("n")), App(App(v("Vec"), v("A")), App(Var(Path(Leaf("Nat"), "succ")), v("n"))))))),
         ],
-        ty=Pi(Some("A"), Sort(1), Pi(None, v("Nat"), Sort(1))),
-      ),
+        ty: Pi(Some("A"), Sort(1), Pi(None, v("Nat"), Sort(1))),
+      }),
     )
   )
 }

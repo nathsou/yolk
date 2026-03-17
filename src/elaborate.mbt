@@ -15,15 +15,11 @@ pub impl Show for ElaborationError with output(self: ElaborationError, logger: &
   }
 }
 
-pub fn Elaborator::new() -> Elaborator raise {
-  {
-    bound_vars: [],
-    inductive_type_being_defined: None,
-    ctx: Context::new(),
-  }
+pub fn Elaborator::new() -> Elaborator {
+  Elaborator::from(Context::new())
 }
 
-pub fn Elaborator::new_with_ctx(ctx: Context) -> Elaborator {
+pub fn Elaborator::from(ctx: Context) -> Elaborator {
   {
     bound_vars: [],
     inductive_type_being_defined: None,
@@ -82,7 +78,7 @@ pub fn Elaborator::elaborate_decl(self: Elaborator, name: Name, decl: Decl[STerm
       let body_elab = self.elaborate_term(body)
       self.ctx.add_decl(name, Definition(ty_elab, body_elab))
     }
-    Inductive(params~, constructors~, ty~) => {
+    Inductive({ params, constructors, ty }) => {
       self.inductive_type_being_defined = Some(name)
       let original_bound_vars_len = self.bound_vars.length()
       defer {
@@ -99,7 +95,8 @@ pub fn Elaborator::elaborate_decl(self: Elaborator, name: Name, decl: Decl[STerm
 
       let constructors_elab = constructors.map(ctor => (ctor.0, self.elaborate_term(ctor.1)))
       let ty_elab = self.elaborate_term(ty)
-      self.ctx.add_decl(name, Inductive(params=params_elab, constructors=constructors_elab, ty=ty_elab))
+      let ind_elab: InductiveDecl[Term] = { params: params_elab, constructors: constructors_elab, ty: ty_elab }
+      self.ctx.add_decl(name, Inductive(ind_elab))
 
       for ctor in constructors {
         let mut ctor_ty = ctor.1
@@ -109,10 +106,10 @@ pub fn Elaborator::elaborate_decl(self: Elaborator, name: Name, decl: Decl[STerm
         }
 
         let ctor_ty_elab = self.elaborate_term(ctor_ty)
-        self.ctx.add_decl(Path(name, ctor.0), Constructor(inductive_name=name, ty=ctor_ty_elab))
+        self.ctx.add_decl(Path(name, ctor.0), Constructor(ind=ind_elab, ty=ctor_ty_elab))
       }
 
-      self.ctx.generate_recursor(name)
+      self.ctx.generate_recursor(name, ind_elab)
     }
     Constructor(_) => raise ElaborationError::Message("Constructors must be declared as part of an inductive type")
     Recursor(..) => raise ElaborationError::Message("Recursors are auto-generated and cannot be declared manually")
