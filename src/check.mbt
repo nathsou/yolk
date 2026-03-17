@@ -839,6 +839,18 @@ test "declarations" {
     #|inductive IllFormed4 : Type
     #|  | intro : (IllFormed4 -> IllFormed4) -> IllFormed4
   ))
+
+  assert_not_ok((
+    #|inductive False : Prop
+    #|inductive P : Prop
+    #|  | intro : (P -> False) -> P
+  ))
+
+  // Coquand's example of (non-strictly) positive occurence that can lead to a paradox
+  assert_not_ok((
+    #|inductive A : Type
+    #|  | intro : ((A -> Prop) -> Prop) -> A
+  ))
   
   // invalid constructor result type
   assert_not_ok((
@@ -880,7 +892,7 @@ test "declarations" {
   // no parameters, just an index
   assert_ok((
     #|inductive Fin : Nat -> Type
-    #|  | zero : forall n : Nat, Fin (Nat.succ n)
+    #|  | zero : forall n : Nat, Fin n
     #|  | succ : forall n : Nat, Fin n -> Fin (Nat.succ n)
   ))
 
@@ -918,5 +930,19 @@ test "declarations" {
   assert_not_ok((
     #|inductive MyList (A : Type) : Type
     #|  | nil : MyList Bool
+  ))
+
+  // Well-Founded Trees
+  assert_ok((
+    #|inductive W (L : Type) (A : L -> Type) : Type
+    #| | node : forall lbl : L, (A lbl -> W L A) -> W L A
+  ))
+
+  assert_ok((
+    #|inductive Acc (A : Type) (ord : A -> A -> Prop) : A -> Prop
+    #|  | intro : forall x : A, (forall y : A, ord y x -> Acc A ord y) -> Acc A ord x
+
+    #|def well_founded_ord : forall A : Type, (A -> A -> Prop) -> (A -> Prop) :=
+    #|  fun A : Type => fun ord : A -> A -> Prop => fun x : A => Acc A ord x
   ))
 }
