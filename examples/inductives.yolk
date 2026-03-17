@@ -51,7 +51,6 @@ def Not : Prop -> Prop := fun (P : Prop) => P -> False
 def Not.intro : forall P : Prop, (P -> False) -> Not P :=
   fun (P : Prop) (h : P -> False) => h
 
--- Nested forall in type (regression test for nested pi syntax)
 def Not.elim : forall A : Prop, forall P : Prop, Not P -> P -> A :=
   fun (A : Prop) (P : Prop) (hnp : Not P) (hp : P) => False.elim A (hnp hp)
 
@@ -71,7 +70,6 @@ inductive Eq (A : Type) : A -> A -> Prop
 #valid Eq.refl Nat Nat.zero
 
 def Nat.pred : Nat -> Nat :=
-  -- Nested fun in argument (regression test for nested binder syntax)
   Nat.rec (fun _ : Nat => Nat)
     Nat.zero
     (fun m : Nat => fun ih : Nat => m)

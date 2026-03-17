@@ -3,7 +3,7 @@
 Yet anOther Logic Kernel
 
 Yolk is a minimal kernel implementation for the Calculus of Inductive Constructions (CIC)
-It can be used both as a proof assistant and as a purely functional programming language, thanks to the [Propositions As Types ](https://en.wikipedia.org/wiki/Curry%E2%80%93Howard_correspondence).
+It can be used both as a proof assistant and as a purely functional programming language, thanks to the [Curry-Howard correspondence](https://en.wikipedia.org/wiki/Curry%E2%80%93Howard_correspondence).
 
 ## References
 
