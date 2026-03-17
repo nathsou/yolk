@@ -8,7 +8,6 @@ fn GlobalEnv::default() -> GlobalEnv raise {
   
   env.add(Leaf("Bool"), Inductive(
     params=[],
-    arity=Sort(1),
     constructors=[
       ("true", Const(Leaf("Bool"))),
       ("false", Const(Leaf("Bool"))),
@@ -28,7 +27,6 @@ fn GlobalEnv::default() -> GlobalEnv raise {
   
   env.add(Leaf("Nat"), Inductive(
     params=[],
-    arity=Sort(1),
     constructors=[
       ("zero", Const(Leaf("Nat"))),
       ("succ", Pi(None, Const(Leaf("Nat")), Const(Leaf("Nat")))),
@@ -64,11 +62,16 @@ struct Context {
 }
 
 pub fn Context::new() -> Context raise {
-  {
+  let ctx: Context = {
     env: GlobalEnv::default(),
     next_free_var_id: 0,
     free_vars: {},
   }
+
+  // Generate recursors for built-in inductive types
+  ctx.generate_recursor(Leaf("Bool"))
+  ctx.generate_recursor(Leaf("Nat"))
+  ctx
 }
 
 pub fn Context::add_decl(self: Context, name: Name, decl: Decl[Term]) -> Unit raise TypeCheckError {
@@ -141,7 +144,13 @@ fn Context::check_decl(self: Context, name: Name, decl: Decl[Term]) -> Unit rais
           let s = self.infer(arg_ty)
           if self.whnf(s) is Sort(u) {
             if ind_level > 0 && u > ind_level {
-              raise TypeError(ctor_ty, "Invalid universe level in constructor '\{name}': Parameter has type '\{arg_ty}' at universe level '\{u}' which is not less than or equal to the inductive type's resulting universe level '\{ind_level}'")
+              raise TypeError(
+                ctor_ty,
+                (
+                  #|Invalid universe level in constructor '\{name}':
+                  #|Parameter has type '\{arg_ty}' at universe level '\{u}' which is not less than or equal to the inductive type's resulting universe level '\{ind_level}'")
+                )
+              )
             }
 
             if !self.is_strictly_positive(arg_ty, inductive_name) {
@@ -170,7 +179,266 @@ fn Context::check_decl(self: Context, name: Name, decl: Decl[Term]) -> Unit rais
         raise TypeError(ctor_ty, "Constructor '\{name}' refers to unknown inductive type '\{inductive_name}'")
       }
     }
+    Recursor(..) => {
+      raise TypeError(decl.ty(), "Recursor '\{name}' cannot be declared manually; it is auto-generated")
+    }
   }
+}
+
+// Given a term and an inductive name + param FreeVars, check if the term is
+// an application of `I param_fvars... indices...`. If so, return Some(indices).
+fn is_ind_app(term: Term, ind_name: Name, param_vars: Array[OpenedBinder]) -> Array[Term]? {
+  let (head, args) = term.collect_app_args()
+  let n_params = param_vars.length()
+
+  match head {
+    Const(c) => {
+      if c != ind_name || args.length() < n_params {
+        return None
+      }
+
+      // Check that the first n_params args match the param FreeVars
+      for i in 0..<n_params {
+        let { name, fvar, .. } = param_vars[i]
+        if !args[i].alpha_eq(FreeVar(name, fvar)) {
+          return None
+        }
+      }
+
+      Some(args[n_params:].to_array())
+    }
+    _ => None
+  }
+}
+
+// Build a Term representing `I param_fvars... extra_args...`
+fn mk_ind_app(ind_name: Name, param_vars: Array[OpenedBinder], extra_args: Array[Term]) -> Term {
+  let mut result = Const(ind_name)
+
+  for p in param_vars {
+    result = App(result, FreeVar(p.name, p.fvar))
+  }
+
+  for a in extra_args {
+    result = App(result, a)
+  }
+
+  result
+}
+
+// Build a term representing `f args...`
+fn mk_app(f: Term, args: Array[Term]) -> Term {
+  let mut result = f
+
+  for a in args {
+    result = App(result, a)
+  }
+
+  result
+}
+
+// Close a single FreeVar and wrap in a Pi binder.
+// If the variable doesn't occur in the body (non-dependent), use Pi(None, ...).
+fn close_pi(body: Term, name: String, fvar_id: FreeVarId, fvar_ty: Term) -> Term {
+  let closed_body = close(body, fvar_id, 0)
+  if closed_body.has_loose_bvar(0) {
+    Pi(Some(name), fvar_ty, closed_body)
+  } else {
+    Pi(None, fvar_ty, closed_body)
+  }
+}
+
+/// Generate a recursor declaration for the given inductive type and add it to the environment.
+fn Context::generate_recursor(self: Context, ind_name: Name) -> Unit raise TypeCheckError {
+  let (params, ind_ty, constructors) = match self.env.decls.get(ind_name) {
+    Some(Inductive(params~, ty~, constructors~)) => (params, ty, constructors)
+    _ => raise TypeError(Const(ind_name), "Cannot generate recursor for '\{ind_name}': not an inductive type")
+  }
+  let num_params = params.length()
+  let cleanup: Array[FreeVarId] = []
+
+  defer {
+    for var_id in cleanup {
+      self.free_vars.remove(var_id)
+    }
+  }
+
+  // 1. Open the parameter binders from the inductive type
+  let (param_vars, opened_arity) = self.open_binders(ind_ty, num_params, cleanup)
+
+  // 2. Open the index binders from the opened arity
+  let mut remaining = opened_arity
+  let index_vars: Array[OpenedBinder] = []
+  let mut index_idx = 1
+
+  while remaining is Pi(x, a, b) {
+    let name = match x { Some(x) => x; None => "idx\{index_idx}" }
+    let fresh = self.declare_fresh(a)
+    cleanup.push(fresh)
+    index_vars.push({ name, fvar: fresh, ty: a })
+    remaining = instantiate(b, 0, FreeVar(name, fresh))
+    index_idx += 1
+  }
+
+  let num_indices = index_vars.length()
+
+  // 3. Get the result universe level
+  let result_level: UniverseLevel = match remaining {
+    Sort(u) => u
+    _ => raise TypeError(ind_ty, "Inductive type '\{ind_name}' does not end in a Sort")
+  }
+
+  // 4. Build the target type: I param_fvars... index_fvars...
+  let index_fvar_terms: Array[Term] = index_vars.map(b => FreeVar(b.name, b.fvar))
+  let target_type = mk_ind_app(ind_name, param_vars, index_fvar_terms)
+
+  // 5. Build the motive type: forall (indices...), forall (t : I params... indices...), Sort(result_level)
+  let motive_target_var_id = self.declare_fresh(target_type)
+  cleanup.push(motive_target_var_id)
+  let mut motive_body = Term::Sort(result_level)
+  let motive_target_name = "t"
+  motive_body = close_pi(motive_body, motive_target_name, motive_target_var_id, target_type)
+
+  for i = index_vars.length() - 1; i >= 0; i = i - 1 {
+    let idx = index_vars[i]
+    motive_body = close_pi(motive_body, idx.name, idx.fvar, idx.ty)
+  }
+
+  // Declare the motive FreeVar
+  let motive_fvar_id = self.declare_fresh(motive_body)
+  cleanup.push(motive_fvar_id)
+  let motive_name = "motive"
+  let motive_fvar = FreeVar(motive_name, motive_fvar_id)
+
+  // 6. For each constructor, build its minor premise type
+  let minor_vars: Array[OpenedBinder] = []
+  for ctor in constructors {
+    let (ctor_name, ctor_ty) = ctor
+    let minor_cleanup: Array[FreeVarId] = []
+    defer {
+      for var_id in minor_cleanup {
+        self.free_vars.remove(var_id)
+      }
+    }
+
+    // The constructor types from the Inductive decl have loose BoundVars
+    // referring to params. Instantiate them with the param FreeVars.
+    // BoundVar(i) refers to param_vars[num_params - 1 - i]
+    let mut ctor_remaining = ctor_ty
+    for i in 0..<num_params {
+      let p = param_vars[num_params - 1 - i]
+      ctor_remaining = instantiate(ctor_remaining, i.reinterpret_as_uint(), FreeVar(p.name, p.fvar))
+    }
+
+    // Collect constructor arguments (non-param args) by opening Pi binders
+    let ctor_arg_vars: Array[OpenedBinder] = []
+    let mut param_idx = 1
+    while ctor_remaining is Pi(x, a, b) {
+      let name = match x { Some(x) => x; None => "a\{param_idx}" }
+      let fresh = self.declare_fresh(a)
+      cleanup.push(fresh)
+      minor_cleanup.push(fresh)
+      ctor_arg_vars.push({ name, fvar: fresh, ty: a })
+      ctor_remaining = instantiate(b, 0, FreeVar(name, fresh))
+      param_idx += 1
+    }
+
+    // ctor_remaining is now the return type: I params... i1 ... im
+    // Extract the constructor's specific indices
+    let ctor_indices = match is_ind_app(ctor_remaining, ind_name, param_vars) {
+      Some(idxs) => idxs
+      None => raise TypeError(ctor_ty, "Constructor '\{ctor_name}' return type is not a valid application of '\{ind_name}'")
+    }
+
+    // Build the constructor application: ctor_full_name param_fvars... arg_fvars...
+    // Resolve the full constructor name
+    let ctor_full_name: Name = if self.env.decls.contains(Path(ind_name, ctor_name)) {
+      Path(ind_name, ctor_name)
+    } else {
+      Leaf(ctor_name)
+    }
+
+    let mut ctor_app = Const(ctor_full_name)
+    for p in param_vars {
+      ctor_app = App(ctor_app, FreeVar(p.name, p.fvar))
+    }
+
+    for a in ctor_arg_vars {
+      ctor_app = App(ctor_app, FreeVar(a.name, a.fvar))
+    }
+
+    // Build IH (inductive hypothesis) FreeVars for recursive arguments
+    let ih_vars: Array[OpenedBinder] = []
+    for a in ctor_arg_vars {
+      if is_ind_app(a.ty, ind_name, param_vars) is Some(rec_indices) {
+        // IH type: C rec_indices... a_fvar
+        let ih_ty = mk_app(motive_fvar, rec_indices)
+        let ih_ty = Term::App(ih_ty, FreeVar(a.name, a.fvar))
+        let ih_name = "\{a.name}_ih"
+        let ih_fvar = self.declare_fresh(ih_ty)
+        cleanup.push(ih_fvar)
+        minor_cleanup.push(ih_fvar)
+        ih_vars.push({ name: ih_name, fvar: ih_fvar, ty: ih_ty })
+      }
+    }
+
+    // Minor premise result: C ctor_indices... ctor_app
+    let mut minor_result = mk_app(motive_fvar, ctor_indices)
+    minor_result = App(minor_result, ctor_app)
+
+    // Close IH vars, then ctor_arg vars
+    for i = ih_vars.length() - 1; i >= 0; i = i - 1 {
+      let ih = ih_vars[i]
+      minor_result = close_pi(minor_result, ih.name, ih.fvar, ih.ty)
+    }
+
+    for i = ctor_arg_vars.length() - 1; i >= 0; i = i - 1 {
+      let a = ctor_arg_vars[i]
+      minor_result = close_pi(minor_result, a.name, a.fvar, a.ty)
+    }
+
+    // Declare the minor premise FreeVar
+    let minor_fvar = self.declare_fresh(minor_result)
+    cleanup.push(minor_fvar)
+    minor_vars.push({ name: ctor_name, fvar: minor_fvar, ty: minor_result })
+  }
+
+  // 7. Build the final recursor type
+  // Result: C index_fvars... major
+  let major_fvar_id = self.declare_fresh(target_type)
+  cleanup.push(major_fvar_id)
+  let major_fvar_name = "major"
+  let major_fvar = FreeVar(major_fvar_name, major_fvar_id)
+
+  let mut rec_result = mk_app(motive_fvar, index_fvar_terms)
+  rec_result = App(rec_result, major_fvar)
+
+  // Close from inside out: major → indices → minors → motive → params
+  rec_result = close_pi(rec_result, major_fvar_name, major_fvar_id, target_type)
+  for i = index_vars.length() - 1; i >= 0; i = i - 1 {
+    let idx = index_vars[i]
+    rec_result = close_pi(rec_result, idx.name, idx.fvar, idx.ty)
+  }
+
+  for i = minor_vars.length() - 1; i >= 0; i = i - 1 {
+    let m = minor_vars[i]
+    rec_result = close_pi(rec_result, m.name, m.fvar, m.ty)
+  }
+
+  rec_result = close_pi(rec_result, motive_name, motive_fvar_id, motive_body)
+  for i = param_vars.length() - 1; i >= 0; i = i - 1 {
+    let p = param_vars[i]
+    rec_result = close_pi(rec_result, p.name, p.fvar, p.ty)
+  }
+
+  // 8. Add to the environment
+  self.env.add(Path(ind_name, "rec"), Recursor(
+    ind_name~,
+    ty=rec_result,
+    num_params~,
+    num_indices~,
+    num_minors=constructors.length(),
+  ))
 }
 
 fn Context::is_strictly_positive(self: Context, ty: Term, inductive_type_name: Name) -> Bool raise TypeCheckError {
@@ -304,6 +572,7 @@ fn Context::normalise(self: Context, term: Term) -> Term raise TypeCheckError {
           Definition(_, body) => self.normalise(body)
           Inductive(_) => term
           Constructor(_) => term
+          Recursor(_) => term
         }
       } else {
         Const(name)
@@ -382,6 +651,7 @@ pub fn Context::whnf(self: Context, term: Term) -> Term {
           Definition(_, body) => self.whnf(body)
           Inductive(_) => term
           Constructor(_) => term
+          Recursor(_) => term // TODO: iota reduction
         }
       } else {
         Const(name)
@@ -451,6 +721,7 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
           Definition(ty, _) => ty
           Inductive(ty~, ..) => ty
           Constructor(ty~, ..) => ty
+          Recursor(ty~, ..) => ty
         }
       } else {
         raise TypeError(term, "Unbound reference '\{name}'")
@@ -554,11 +825,23 @@ pub fn Context::is_def_eq(self: Context, term: Term, expected: Term) -> Bool rai
     true
   } else {
     match (t1_norm, t2_norm) {
-    // universes are cumulative: Type u <= Type v if u <= v
+      // universes are cumulative: Type u <= Type v if u <= v
       (Sort(u1), Sort(u2)) => u1 <= u2
-      (Pi(_, a1, b1), Pi(_, a2, b2)) => {
-        // Domains must be exactly equal, codomains can be cumulative
-        a1.alpha_eq(a2) && self.is_def_eq(b1, b2)
+      (Pi(x1, a1, b1), Pi(x2, a2, b2)) => {
+        if !self.is_def_eq(a1, a2) {
+          return false
+        }
+
+        // Open both bodies with the same fresh FreeVar so they can be compared
+        let fresh_x = self.declare_fresh(a1)
+        defer self.free_vars.remove(fresh_x)
+
+        let name1 = match x1 { Some(x) => x; None => "_" }
+        let name2 = match x2 { Some(x) => x; None => "_" }
+        let opened_b1 = open(b1, 0, name1, fresh_x)
+        let opened_b2 = open(b2, 0, name2, fresh_x)
+
+        self.is_def_eq(opened_b1, opened_b2)
       }
       _ => false
     }
@@ -944,5 +1227,220 @@ test "declarations" {
 
     #|def well_founded_ord : forall A : Type, (A -> A -> Prop) -> (A -> Prop) :=
     #|  fun A : Type => fun ord : A -> A -> Prop => fun x : A => Acc A ord x
+  ))
+}
+
+test "recursor" {
+  fn elab_program(program: String) -> Context raise {
+    let prog = Parser::new(Lexer::new(program).tokenise()).parse()
+    let elab = Elaborator::new()
+    elab.elaborate(prog)
+    elab.ctx
+  }
+
+  fn assert_ok(program: String) -> Unit raise {
+    try elab_program(program) |> ignore catch {
+      err => fail("Invalid program: '\{err}'\n\{program}")
+    }
+  }
+
+  fn assert_not_ok(program: String) -> Unit raise {
+    try elab_program(program) |> ignore catch {
+      _ => ()
+    } noraise {
+      _ => fail("Expected invalid program:\n\{program}")
+    }
+  }
+
+  fn assert_has_type(program: String, name: String, expected_ty: String) -> Unit raise {
+    let ctx = elab_program(program)
+    // Elaborate the expected type in the same context (so user-defined types are available)
+    let elab = Elaborator::new_with_ctx(ctx)
+    let expected = elab.elaborate_term(Parser::new(Lexer::new(expected_ty).tokenise()).parse_term())
+    let name_parsed = Parser::new(Lexer::new(name).tokenise()).parse_name()
+    match ctx.env.decls.get(name_parsed) {
+      Some(decl) => {
+        let actual_ty = decl.ty()
+        if !ctx.is_def_eq(actual_ty, expected) {
+          fail("Expected '\{name}' to have type '\{expected}', but got '\{actual_ty}'")
+        }
+      }
+      None => fail("'\{name}' not found in environment")
+    }
+  }
+
+  // Bool.rec is generated for built-in Bool
+  assert_has_type(
+    "",
+    "Bool.rec",
+    "forall C: Bool -> Type, C true -> C false -> forall t: Bool, C t"
+  )
+
+  // Nat.rec is generated for built-in Nat
+  assert_has_type(
+    "",
+    "Nat.rec",
+    "forall C: Nat -> Type, C Nat.zero -> (forall n: Nat, C n -> C (Nat.succ n)) -> forall t: Nat, C t"
+  )
+
+  {
+    let list_ind = 
+        #|inductive List (A : Type) : Type
+        #|  | nil : List A
+        #|  | cons : A -> List A -> List A
+
+    // List.rec: recursor with one recursive IH
+    assert_has_type(
+      list_ind,
+      "List.rec",
+      "forall A: Type, forall C: List A -> Type, C (List.nil A) -> (forall a: A, forall l: List A, C l -> C (List.cons A a l)) -> forall t: List A, C t"
+    )
+
+    assert_ok(
+      list_ind + "\n" + (
+      #|def List.len : forall A : Type, List A -> Nat :=
+      #|  fun A : Type =>
+      #|  List.rec A (fun _ : List A => Nat)
+      #|    Nat.zero
+      #|    (fun h : A => fun tl : List A => fun ih : Nat => Nat.succ ih)
+    ))
+  }
+
+  // False: recursor with no minor premises (ex falso quodlibet)
+  assert_has_type(
+    "inductive False : Prop",
+    "False.rec",
+    "forall C: False -> Prop, forall t: False, C t"
+  )
+
+  // True: recursor with one constructor and no args
+  assert_has_type(
+    "inductive True : Prop | intro : True",
+    "True.rec",
+    "forall C: True -> Prop, C True.intro -> forall t: True, C t"
+  )
+
+  // Tree: two recursive arguments in one constructor
+  assert_has_type((
+      #|inductive Tree (A : Type) : Type
+      #|  | leaf : A -> Tree A
+      #|  | node : Tree A -> Tree A -> Tree A
+    ),
+    "Tree.rec",
+    (
+      #|forall A: Type, forall C: Tree A -> Type,
+      #|  (forall a: A, C (Tree.leaf A a)) ->
+      #|  (forall l: Tree A, forall r: Tree A, C l -> C r -> C (Tree.node A l r)) ->
+      #|  forall t: Tree A, C t
+    )
+  )
+
+  // Eq: recursor with indices, no recursive args
+  assert_has_type((
+      #|inductive Eq (A : Type) : A -> A -> Prop
+      #|  | refl : forall x : A, Eq A x x
+    ),
+    "Eq.rec",
+    "forall A: Type, forall C: forall a: A, forall b: A, Eq A a b -> Prop, (forall x: A, C x x (Eq.refl A x)) -> forall a: A, forall b: A, forall t: Eq A a b, C a b t"
+  )
+
+  // Vec: param + index + recursive arg
+  assert_has_type((
+      #|inductive Vec (A : Type) : Nat -> Type
+      #|  | nil : Vec A Nat.zero
+      #|  | cons : A -> forall n : Nat, Vec A n -> Vec A (Nat.succ n)
+    ),
+    "Vec.rec",
+    (
+      #|forall A: Type, forall C: forall n: Nat, Vec A n -> Type, C Nat.zero (Vec.nil A) ->
+      #|  (forall a: A, forall n: Nat, forall v: Vec A n, C n v -> C (Nat.succ n) (Vec.cons A a n v)) -> forall n: Nat, forall t: Vec A n, C n t)
+    )
+  )
+
+  // Fin: no params, one index, recursive arg
+  assert_has_type((
+      #|inductive Fin : Nat -> Type
+      #|  | zero : forall n : Nat, Fin n
+      #|  | succ : forall n : Nat, Fin n -> Fin (Nat.succ n)
+    ),
+    "Fin.rec",
+    (
+      #|forall C: forall n: Nat, Fin n -> Type, (forall n: Nat, C n (Fin.zero n)) ->
+      #|  (forall n: Nat, forall f: Fin n, C n f -> C (Nat.succ n) (Fin.succ n f)) -> forall n: Nat, forall t: Fin n, C n t)
+    )
+  )
+
+  // Exists: dependent parameter (P depends on A)
+  assert_has_type((
+      #|inductive Exists (A : Type) (P : A -> Prop) : Prop
+      #|  | intro : forall a : A, P a -> Exists A P
+    ),
+    "Exists.rec",
+    "forall A: Type, forall P: A -> Prop, forall C: Exists A P -> Prop, (forall a: A, forall h: P a, C (Exists.intro A P a h)) -> forall t: Exists A P, C t"
+  )
+
+  // And: two Prop params, simple constructor
+  assert_has_type((
+      #|inductive And (A : Prop) (B : Prop) : Prop
+      #|  | intro : A -> B -> And A B
+    ),
+    "And.rec",
+    "forall A: Prop, forall B: Prop, forall C: And A B -> Prop, (forall a: A, forall b: B, C (And.intro A B a b)) -> forall t: And A B, C t"
+  )
+
+  // Or: two constructors
+  assert_has_type((
+      #|inductive Or (A : Prop) (B : Prop) : Prop
+      #|  | inl : A -> Or A B
+      #|  | inr : B -> Or A B
+    ),
+    "Or.rec",
+    "forall A: Prop, forall B: Prop, forall C: Or A B -> Prop, (forall a: A, C (Or.inl A B a)) -> (forall b: B, C (Or.inr A B b)) -> forall t: Or A B, C t"
+  )
+
+  // Wrap: simple wrapper
+  assert_has_type((
+    #|inductive Wrap (A : Type) : Type
+    #|  | mk : A -> Wrap A
+  ),
+    "Wrap.rec",
+    "forall A: Type, forall C: Wrap A -> Type, (forall a: A, C (Wrap.mk A a)) -> forall t: Wrap A, C t"
+  )
+
+  // Recursor is well-typed
+  assert_ok((
+    #|inductive List (A : Type) : Type
+    #|  | nil : List A
+    #|  | cons : A -> List A -> List A
+    #|#valid List.rec
+  ))
+
+  assert_ok("#valid Nat.rec")
+  assert_ok("#valid Bool.rec")
+
+  // Recursor name conflicts with an existing declaration
+  assert_not_ok((
+    #|inductive Dummy : Type
+    #|  | mk : Dummy
+    #|  | rec : Dummy
+  ))
+
+  assert_ok((
+    #|inductive False : Prop
+    #|def False.elim : forall P : Prop, forall f : False, P :=
+    #|  fun P : Prop => False.rec (fun _ : False => P)
+  ))
+
+  assert_ok((
+    #|inductive Pair (A : Type) (B : Type) : Type
+    #|  | mk : A -> B -> Pair A B
+    #|
+    #|def Pair.fst : forall A : Type, forall B : Type, Pair A B -> A :=
+    #|  fun A : Type => fun B : Type =>
+    #|    Pair.rec A B (fun _ : Pair A B => A) (fun a : A => fun b : B => a)
+    #|
+    #|def Pair.snd : forall A : Type, forall B : Type, Pair A B -> B :=
+    #|  fun A : Type => fun B : Type =>
+    #|    Pair.rec A B (fun _ : Pair A B => B) (fun a : A => fun b : B => b)
   ))
 }

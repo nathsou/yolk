@@ -110,7 +110,13 @@ fn Term::parens(self: Term, wrap~: Bool, bindings~: Array[String], depth~: Int, 
   if wrap { logger.write_char(')') }
 }
 
-fn Term::fmt(self: Term, bindings~: Array[String], depth~: Int, logger: &Logger) -> Unit {
+fn Term::fmt(
+  self: Term,
+  bindings~: Array[String],
+  depth~: Int,
+  logger: &Logger,
+  show_var_ids~: Bool = false,
+) -> Unit {
   match self {
     Sort(u) => logger.write_string(show_sort(u))
     BoundVar(idx) => {
@@ -118,10 +124,11 @@ fn Term::fmt(self: Term, bindings~: Array[String], depth~: Int, logger: &Logger)
       if eff_idx < 0 {
         logger.write_string("<invalid bound variable index: \{idx}>")
       } else {
-        logger.write_string(bindings[eff_idx])
+        let name = bindings[eff_idx]
+        logger.write_string(if show_var_ids { "bv_\{name}#\{idx}" } else { name })
       }
     }
-    FreeVar(name, _) => logger.write_string(name)
+    FreeVar(name, id) => logger.write_string(if show_var_ids { "fv_\{name}#\{id}" } else { name })
     Const(name) => logger.write_object(name)
     App(lhs, rhs) => {
       let lhs_needs_parens = lhs is Lam(_)

@@ -14,7 +14,6 @@ pub enum Decl[T] {
   Definition(T, T) // type, body
   Inductive(
     params~: Array[(String, T)],
-    arity~: T,
     constructors~: Array[(String, T)],
     ty~: T,
   )
@@ -22,7 +21,24 @@ pub enum Decl[T] {
     inductive_name~: Name,
     ty~: T
   )
+  Recursor(
+    ind_name~: Name,
+    num_params~: Int,
+    num_indices~: Int,
+    num_minors~: Int,
+    ty~: T,
+  )
 } derive(Eq)
+
+pub fn[T] Decl::ty(self: Decl[T]) -> T {
+  match self {
+    Axiom(ty) => ty
+    Definition(ty, _) => ty
+    Inductive(ty~, ..) => ty
+    Constructor(ty~, ..) => ty
+    Recursor(ty~, ..) => ty
+  }
+}
 
 pub fn Decl::inductive(params~: Array[(String, STerm)], arity~: STerm, constructors~: Array[(String, STerm)]) -> Decl[STerm] {
   let mut ty = arity
@@ -31,7 +47,7 @@ pub fn Decl::inductive(params~: Array[(String, STerm)], arity~: STerm, construct
     ty = Pi(Some(param.0), param.1, ty)
   }
 
-  Inductive(params~, arity~, constructors~, ty~)
+  Inductive(params~, constructors~, ty~)
 }
 
 pub enum TopLevel[T] {
@@ -153,21 +169,11 @@ pub impl[T: Show] Show for TopLevel[T] with output(self: TopLevel[T], logger: &L
       logger.write_string(" := ")
       logger.write_object(val)
     }
-    Declaration(name, Inductive(params~, arity~, constructors~, ty=_)) => {
+    Declaration(name, Inductive(params=_, constructors~, ty~)) => {
       logger.write_string("inductive ")
       logger.write_object(name)
-      logger.write_char(' ')
-      
-      for param in params {
-        logger.write_char('(')
-        logger.write_string(param.0)
-        logger.write_string(": ")
-        logger.write_object(param.1)
-        logger.write_string(") ")
-      }
-
-      logger.write_string(": ")
-      logger.write_object(arity)
+      logger.write_string(" : ")
+      logger.write_object(ty)
       logger.write_char('\n')
 
       for ctor in constructors {
@@ -180,6 +186,12 @@ pub impl[T: Show] Show for TopLevel[T] with output(self: TopLevel[T], logger: &L
     }
     Declaration(name, Constructor(inductive_name=_, ty~)) => {
       logger.write_string("constructor ")
+      logger.write_object(name)
+      logger.write_string(" : ")
+      logger.write_object(ty)
+    }
+    Declaration(name, Recursor(ty~, ..)) => {
+      logger.write_string("recursor ")
       logger.write_object(name)
       logger.write_string(" : ")
       logger.write_object(ty)

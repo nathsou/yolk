@@ -23,6 +23,14 @@ pub fn Elaborator::new() -> Elaborator raise {
   }
 }
 
+pub fn Elaborator::new_with_ctx(ctx: Context) -> Elaborator {
+  {
+    bound_vars: [],
+    inductive_type_being_defined: None,
+    ctx,
+  }
+}
+
 pub fn Elaborator::elaborate(self: Elaborator, program: Program[STerm]) -> Unit raise {
   for top_level in program.0 {
     match top_level {
@@ -34,20 +42,29 @@ pub fn Elaborator::elaborate(self: Elaborator, program: Program[STerm]) -> Unit 
 
 pub fn Elaborator::run_command(self: Elaborator, name: String, args: Array[STerm]) -> Unit raise {
   let args_elab = args.map(arg => self.elaborate_term(arg))
+  if args_elab.length() != 1 {
+    raise ElaborationError::Message("'\{name}' command expects exactly one argument")
+  }
 
   match name {
-    "eval" | "check" => {
-      if args_elab.length() != 1 {
-        raise ElaborationError::Message("'\{name}' command expects exactly one argument")
-      }
-
+    "eval" | "check" | "valid" => {
       let ty = self.ctx.infer(args_elab[0])
 
-      if name == "check" {
-        println(ty)
-      } else {
-        let nf = self.ctx.normalise(args_elab[0])
-        println(nf)
+      match name {
+        "check" => { println(ty) }
+        "valid" => ()
+        "eval" => {
+          let nf = self.ctx.normalise(args_elab[0])
+          println(nf)
+        }
+        _ => ()
+      }
+    }
+    "invalid" => {
+      try self.ctx.infer(args_elab[0]) catch {
+        _ => ()
+      } noraise {
+        ty => raise ElaborationError::Message("Expected term '\{args[0]}' to be invalid, but it is well-typed with type '\{ty}'")
       }
     }
     _ => raise ElaborationError::Message("Invalid command: '\{name}'")
@@ -65,7 +82,7 @@ pub fn Elaborator::elaborate_decl(self: Elaborator, name: Name, decl: Decl[STerm
       let body_elab = self.elaborate_term(body)
       self.ctx.add_decl(name, Definition(ty_elab, body_elab))
     }
-    Inductive(params~, arity~, constructors~, ty~) => {
+    Inductive(params~, constructors~, ty~) => {
       self.inductive_type_being_defined = Some(name)
       let original_bound_vars_len = self.bound_vars.length()
       defer {
@@ -80,10 +97,9 @@ pub fn Elaborator::elaborate_decl(self: Elaborator, name: Name, decl: Decl[STerm
         params_elab.push((param.0, self.elaborate_term(param.1)))
       }
 
-      let arity_elab = self.elaborate_term(arity)
       let constructors_elab = constructors.map(ctor => (ctor.0, self.elaborate_term(ctor.1)))
       let ty_elab = self.elaborate_term(ty)
-      self.ctx.add_decl(name, Inductive(params=params_elab, arity=arity_elab, constructors=constructors_elab, ty=ty_elab))
+      self.ctx.add_decl(name, Inductive(params=params_elab, constructors=constructors_elab, ty=ty_elab))
 
       for ctor in constructors {
         let mut ctor_ty = ctor.1
@@ -95,8 +111,11 @@ pub fn Elaborator::elaborate_decl(self: Elaborator, name: Name, decl: Decl[STerm
         let ctor_ty_elab = self.elaborate_term(ctor_ty)
         self.ctx.add_decl(Path(name, ctor.0), Constructor(inductive_name=name, ty=ctor_ty_elab))
       }
+
+      self.ctx.generate_recursor(name)
     }
     Constructor(_) => raise ElaborationError::Message("Constructors must be declared as part of an inductive type")
+    Recursor(..) => raise ElaborationError::Message("Recursors are auto-generated and cannot be declared manually")
   }
 }
 

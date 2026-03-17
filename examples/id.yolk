@@ -4,12 +4,11 @@ def id : forall A : Type, A -> A := fun A: Type => fun x: A => x
 def a_imp_b_imp_a : forall A : Prop, forall B : Prop, A -> B -> A :=
     fun A : Prop => fun B : Prop => fun x : A => fun y : B => x
 
-#check a_imp_b_imp_a
-#eval id Bool true
+#valid id Bool true
 
 inductive List (A : Type) : Type
   | nil : List A
-  | cons : A -> List A
+  | cons : A -> List A -> List A
 
 inductive Vec (A : Type) : Nat -> Type
   | nil : Vec A Nat.zero
@@ -20,27 +19,49 @@ inductive True : Prop
 
 inductive False : Prop
 
+def False.elim : forall P : Prop, False -> P :=
+  fun P : Prop => False.rec (fun _ : False => P)
+
 inductive And (P : Prop) (Q : Prop) : Prop
-  | intro : And P Q
+  | intro : P -> Q -> And P Q
+  
+def And.elim_left : forall P : Prop, forall Q : Prop, And P Q -> P :=
+  fun P : Prop => fun Q : Prop => And.rec P Q (fun _ : And P Q => P) (fun p : P => fun _ : Q => p)
+  
+def And.elim_right : forall P : Prop, forall Q : Prop, And P Q -> Q :=
+  fun P : Prop => fun Q : Prop => And.rec P Q (fun _ : And P Q => Q) (fun _ : P => fun q : Q => q)
+
+#valid fun A : Prop => fun B : Prop => fun ab : And A B => And.elim_left A B ab
+
+inductive Or (P : Prop) (Q : Prop) : Prop
+  | inl : P -> Or P Q
+  | inr : Q -> Or P Q
 
 def one : Nat := Nat.succ Nat.zero
 def two : Nat := Nat.succ one
 def three : Nat := Nat.succ two
 
-#check Vec (List Bool) three
+#valid Vec (List Bool) three
 
 def vec1 : Vec Bool one := Vec.cons Bool true Nat.zero (Vec.nil Bool)
 def vec2 : Vec Bool two := Vec.cons Bool false one vec1
 def vec3 : Vec Bool three := Vec.cons Bool false two vec2
 
-#eval vec3
+#valid vec3
 
 def Not : Prop -> Prop := fun P : Prop => P -> False
 
-def Not.intro : forall P : Prop, (P -> False) -> Not P := fun P : Prop => fun h : P -> False => h
+def Not.intro : forall P : Prop, (P -> False) -> Not P :=
+  fun P : Prop => fun h : P -> False => h
 
-#check Not.intro (And True False)
-#check Vec.cons
+def Not.elim : forall A : Prop, forall P : Prop, Not P -> P -> A :=
+  fun A : Prop => fun P : Prop => fun hnp : Not P => fun hp : P => False.elim A (hnp hp)
+
+def absurd : forall A : Prop, False -> A :=
+  fun A : Prop => fun f : False => False.elim A f
+
+#valid Not.intro (And True False)
+#valid Vec.cons
 
 inductive Tree (A : Type) : Type
   | leaf : A -> Tree A
@@ -49,4 +70,38 @@ inductive Tree (A : Type) : Type
 inductive Eq (A : Type) : A -> A -> Prop
   | refl : forall x : A, Eq A x x
 
-#check Eq.refl Nat Nat.zero
+#valid Eq.refl Nat Nat.zero
+
+def Nat.pred : Nat -> Nat :=
+  Nat.rec (fun _ : Nat => Nat)
+    Nat.zero
+    (fun m : Nat => fun ih : Nat => m)
+
+#invalid Nat.pred true
+#invalid Nat.rec (fun _ : Nat => Nat) true (fun m : Nat => fun ih : Nat => m)
+#invalid Nat.rec (fun _ : Nat => Bool) true (fun m : Nat => fun ih : Bool => m)
+
+#valid Nat.pred three
+
+inductive Pair (A : Type) (B : Type) : Type
+  | mk : A -> B -> Pair A B
+
+def Pair.fst : forall A : Type, forall B : Type, Pair A B -> A :=
+  fun A : Type => fun B : Type =>
+    Pair.rec A B (fun _ : Pair A B => A) (fun a : A => fun b : B => a)
+
+def Pair.snd : forall A : Type, forall B : Type, Pair A B -> B :=
+  fun A : Type => fun B : Type =>
+    Pair.rec A B (fun _ : Pair A B => B) (fun a : A => fun b : B => b)
+
+def pair : Pair Bool Nat := Pair.mk Bool Nat true three
+#valid Pair.fst Bool Nat pair
+#valid Pair.snd Bool Nat pair
+
+def List.len : forall A : Type, List A -> Nat :=
+  fun A : Type =>
+    List.rec A (fun _ : List A => Nat)
+      Nat.zero
+      (fun h : A => fun tl : List A => fun ih : Nat => Nat.succ ih)
+
+#check List.len Nat (List.cons Nat Nat.zero (List.cons Nat one (List.cons Nat two (List.cons Nat three (List.nil Nat)))))
