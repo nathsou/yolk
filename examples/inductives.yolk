@@ -1,5 +1,5 @@
 
-def id : forall A : Type, A -> A := fun (A : Type) (x : A) => x
+def id (A : Type) (x : A) : A := x
 
 #valid id Bool true
 
@@ -16,17 +16,17 @@ inductive True : Prop
 
 inductive False : Prop
 
-def False.elim : forall P : Prop, False -> P :=
-  fun (P : Prop) => False.rec (fun _ : False => P)
+def False.elim (P : Prop) : False -> P :=
+  False.rec (fun _ => P)
 
 inductive And (P : Prop) (Q : Prop) : Prop
   | intro : P -> Q -> And P Q
   
-def And.elim_left : forall (P : Prop) (Q : Prop), And P Q -> P :=
-  fun (P : Prop) (Q : Prop) => And.rec P Q (fun _ : And P Q => P) (fun (p : P) (_ : Q) => p)
+def And.elim_left (P : Prop) (Q : Prop) : And P Q -> P :=
+  And.rec P Q (fun _ => P) (fun p _ => p)
   
-def And.elim_right : forall (P : Prop) (Q : Prop), And P Q -> Q :=
-  fun (P : Prop) (Q : Prop) => And.rec P Q (fun _ : And P Q => Q) (fun (_ : P) (q : Q) => q)
+def And.elim_right (P : Prop) (Q : Prop) : And P Q -> Q :=
+  And.rec P Q (fun _ => Q) (fun _ q => q)
 
 #valid fun (A : Prop) (B : Prop) (ab : And A B) => And.elim_left A B ab
 
@@ -46,16 +46,14 @@ def vec3 : Vec Bool three := Vec.cons Bool false two vec2
 
 #valid vec3
 
-def Not : Prop -> Prop := fun (P : Prop) => P -> False
+def Not (P : Prop) : Prop := P -> False
 
-def Not.intro : forall P : Prop, (P -> False) -> Not P :=
-  fun (P : Prop) (h : P -> False) => h
+def Not.intro (P : Prop) (h : P -> False) : Not P := h
 
-def Not.elim : forall A : Prop, forall P : Prop, Not P -> P -> A :=
-  fun (A : Prop) (P : Prop) (hnp : Not P) (hp : P) => False.elim A (hnp hp)
+def Not.elim (A : Prop) (P : Prop) (hnp : Not P) (hp : P) : A :=
+  False.elim A (hnp hp)
 
-def absurd : forall A : Prop, False -> A :=
-  fun (A : Prop) (f : False) => False.elim A f
+def absurd (A : Prop) (f : False) : A := False.elim A f
 
 #valid Not.intro (And True False)
 #valid Vec.cons
@@ -70,9 +68,7 @@ inductive Eq (A : Type) : A -> A -> Prop
 #valid Eq.refl Nat Nat.zero
 
 def Nat.pred : Nat -> Nat :=
-  Nat.rec (fun _ : Nat => Nat)
-    Nat.zero
-    (fun m : Nat => fun ih : Nat => m)
+  Nat.rec (fun _ => Nat) Nat.zero (fun m _ => m)
 
 #invalid Nat.pred true
 #invalid Nat.rec (fun _ : Nat => Nat) true (fun m : Nat => fun ih : Nat => m)
@@ -83,43 +79,38 @@ def Nat.pred : Nat -> Nat :=
 inductive Pair (A : Type) (B : Type) : Type
   | mk : A -> B -> Pair A B
 
-def Pair.fst : forall (A : Type) (B : Type), Pair A B -> A :=
-  fun (A : Type) (B : Type) =>
-    Pair.rec A B (fun _ : Pair A B => A) (fun (a : A) (b : B) => a)
+def Pair.fst (A : Type) (B : Type) : Pair A B -> A :=
+  Pair.rec A B (fun _ => A) (fun a _ => a)
 
-def Pair.snd : forall (A : Type) (B : Type), Pair A B -> B :=
-  fun (A : Type) (B : Type) =>
-    Pair.rec A B (fun _ : Pair A B => B) (fun (a : A) (b : B) => b)
+def Pair.snd (A : Type) (B : Type) : Pair A B -> B :=
+  Pair.rec A B (fun _ => B) (fun _ b => b)
 
 def pair : Pair Bool Nat := Pair.mk Bool Nat true three
 #valid Pair.fst Bool Nat pair
 #valid Pair.snd Bool Nat pair
 
-def List.len : forall A : Type, List A -> Nat :=
-  fun (A : Type) =>
-    List.rec A (fun _ : List A => Nat)
+def List.len (A : Type) : List A -> Nat :=
+  List.rec A (fun _ => Nat)
       Nat.zero
-      (fun (h : A) (tl : List A) (ih : Nat) => Nat.succ ih)
+      (fun h tl ih => Nat.succ ih)
 
 #eval List.len Nat (List.cons Nat Nat.zero (List.cons Nat one (List.cons Nat two (List.cons Nat three (List.nil Nat)))))
 
-def Nat.add : Nat -> Nat -> Nat :=
-  fun (n : Nat) (m : Nat) =>
-    Nat.rec (fun _ : Nat => Nat) m (fun (_ : Nat) (ih : Nat) => Nat.succ ih) n
+def Nat.add (m : Nat) : Nat -> Nat :=
+  Nat.rec (fun _ => Nat) m (fun _ ih => Nat.succ ih)
 
 def five : Nat := Nat.add two three
 #eval five
 
 def Bool.not : Bool -> Bool :=
-  Bool.rec (fun _ : Bool => Bool) false true
+  Bool.rec (fun _ => Bool) false true
 
 #eval Pair.mk Bool Bool (Bool.not true) (Bool.not false)
 
-def Nat.mul : Nat -> Nat -> Nat :=
-  fun (m : Nat) =>
-    Nat.rec (fun _ : Nat => Nat)
-      Nat.zero
-      (fun (_ : Nat) (ih : Nat) => Nat.add m ih)
+def Nat.mul (m : Nat) : Nat -> Nat :=
+  Nat.rec (fun _ => Nat)
+    Nat.zero
+    (fun _ ih => Nat.add m ih)
 
 #eval Nat.mul three two
 
@@ -133,13 +124,13 @@ def Nat.mul : Nat -> Nat -> Nat :=
   List.len Nat lst
 )
 
-def Tree.size : forall A : Type, Tree A -> Nat := fun A : Type =>
-  Tree.rec A (fun _ : Tree A => Nat)
-    (fun _ : A => Nat.succ Nat.zero)
-    (fun (l : Tree A) (r : Tree A) (lih : Nat) (rih : Nat) =>
-      Nat.rec (fun _ : Nat => Nat)
+def Tree.size (A : Type) : Tree A -> Nat :=
+  Tree.rec A (fun _ => Nat)
+    (fun _ => Nat.succ Nat.zero)
+    (fun l r lih rih =>
+      Nat.rec (fun _ => Nat)
         rih
-        (fun (_ : Nat) (ih : Nat) => Nat.succ ih) lih
+        (fun _ ih => Nat.succ ih) lih
     )
 
 #eval (

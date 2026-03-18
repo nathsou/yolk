@@ -3,8 +3,8 @@ pub enum STerm {
   Sort(UniverseLevel)
   Var(Name)
   App(STerm, STerm)
-  Fun(String, STerm, STerm)
-  Pi(String?, STerm, STerm)
+  Fun(String, STerm?, STerm)
+  Pi(String?, STerm?, STerm)
   Let(String, STerm, STerm)
   Ann(STerm, STerm)
 } derive(Eq)
@@ -57,7 +57,7 @@ pub fn Decl::mk_inductive(
   let mut ty = arity
 
   for param in params.rev_iter() {
-    ty = Pi(Some(param.0), param.1, ty)
+    ty = Pi(Some(param.0), Some(param.1), ty)
   }
 
   Inductive({ params, constructors, ty })
@@ -136,7 +136,7 @@ pub impl Show for STerm with output(self: STerm, logger: &Logger) {
       logger.write_char(' ')
       rhs.parens(rhs_needs_parens, logger)
     }
-    Fun(x, ty, body) => {
+    Fun(x, Some(ty), body) => {
       logger.write_string("fun ")
       logger.write_string(x)
       logger.write_string(" : ")
@@ -144,7 +144,13 @@ pub impl Show for STerm with output(self: STerm, logger: &Logger) {
       logger.write_string(" => ")
       body.output(logger)
     }
-    Pi(Some(x), a, b) => {
+    Fun(x, None, body) => {
+      logger.write_string("fun ")
+      logger.write_string(x)
+      logger.write_string(" => ")
+      body.output(logger)
+    }
+    Pi(Some(x), Some(a), b) => {
       logger.write_string("forall ")
       logger.write_string(x)
       logger.write_string(" : ")
@@ -152,11 +158,18 @@ pub impl Show for STerm with output(self: STerm, logger: &Logger) {
       logger.write_string(", ")
       b.output(logger)
     }
-    Pi(None, a, b) => {
+    Pi(Some(x), None, b) => {
+      logger.write_string("forall ")
+      logger.write_string(x)
+      logger.write_string(", ")
+      b.output(logger)
+    }
+    Pi(None, Some(a), b) => {
       a.parens(a is Pi(_), logger)
       logger.write_string(" -> ")
       b.parens(b is Pi(Some(_), _, _), logger)
     }
+    Pi(None, None, _) => ()
     Let(x, val, body) => {
       logger.write_string("let ")
       logger.write_string(x)

@@ -702,13 +702,13 @@ test "iota reduction" {
     #|  | leaf : A -> Tree A
     #|  | node : Tree A -> Tree A -> Tree A
     #|
-    #|def Tree.size : forall A : Type, Tree A -> Nat := fun A : Type =>
-    #|  Tree.rec A (fun _ : Tree A => Nat)
+    #|def Tree.size (A : Type) : Tree A -> Nat :=
+    #|  Tree.rec A (fun _ => Nat)
     #|    (fun _ : A => Nat.succ Nat.zero)
     #|    (fun (l : Tree A) (r : Tree A) (lih : Nat) (rih : Nat) =>
-    #|      Nat.rec (fun _ : Nat => Nat)
+    #|      Nat.rec (fun _ => Nat)
     #|        rih
-    #|        (fun (_ : Nat) (ih : Nat) => Nat.succ ih) lih
+    #|        (fun _ ih => Nat.succ ih) lih
     #|    )
     
   assert_nf_with_program(
@@ -725,15 +725,14 @@ test "iota reduction" {
 
   {
     let program = (
-      #|def Nat.add : Nat -> Nat -> Nat :=
-      #|  fun (n : Nat) (m : Nat) =>
-      #|    Nat.rec (fun _ : Nat => Nat) m (fun (_ : Nat) (ih : Nat) => Nat.succ ih) n
+      #|def Nat.add (m : Nat) : Nat -> Nat :=
+      #|  Nat.rec (fun _ => Nat) m (fun _ ih => Nat.succ ih)
       #|
       #|def three : Nat := Nat.succ (Nat.succ (Nat.succ Nat.zero))
       #|def five : Nat := Nat.succ (Nat.succ (Nat.succ (Nat.succ (Nat.succ Nat.zero))))
       #|
       #|def Bool.not : Bool -> Bool :=
-      #|  Bool.rec (fun _ : Bool => Bool) false true
+      #|  Bool.rec (fun _ => Bool) false true
     )
 
     try elab_program(program) |> ignore catch {
@@ -744,9 +743,7 @@ test "iota reduction" {
   {
     let program = (
       #|def Nat.pred : Nat -> Nat :=
-      #|  Nat.rec (fun _ : Nat => Nat)
-      #|    Nat.zero
-      #|    (fun (m : Nat) (ih : Nat) => m)
+      #|  Nat.rec (fun _ => Nat) Nat.zero (fun m _ => m)
     )
     
     let ctx = elab_program(program)

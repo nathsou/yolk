@@ -841,14 +841,7 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
     Sort(u) => Sort(u + 1) // Prop : Type 0, Type u : Type (u + 1)
     Const(name) => {
       if self.env.decls.get(name) is Some(decl) {
-        match decl {
-          Axiom(ty) => ty
-          // we already checked that the environment is well-formed
-          Definition(ty, _) => ty
-          Inductive({ ty, .. }) => ty
-          Constructor(ty~, ..) => ty
-          Recursor(ty~, ..) => ty
-        }
+        decl.ty()
       } else {
         raise TypeError(term, "Unbound reference '\{name}'")
       }

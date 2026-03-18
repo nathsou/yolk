@@ -316,11 +316,29 @@ fn Parser::parser_axiom(self: Parser) -> TopLevel[STerm] raise ParserError {
 fn Parser::parse_definition(self: Parser) -> TopLevel[STerm] raise ParserError {
   self.expect(Def)
   let name = self.parse_name()
-  self.expect(Colon)
-  let ty = self.parse_term()
-  self.expect(ColonEqual)
-  let body = self.parse_term()
-  Declaration(name, Definition(ty, body))
+  
+  match self.peek() {
+    Colon => {
+      self.advance()
+      let ty = self.parse_term()
+      self.expect(ColonEqual)
+      let body = self.parse_term()
+      Declaration(name, Definition(ty, body))
+    }
+    Lparen => {
+      let binders = self.parse_binders(until=Colon)
+      self.expect(Colon)
+      let ret_ty = self.parse_term()
+      // desugar a definition with multiple binders into a Pi type
+      let ty = binders.rev_fold(init=ret_ty, (acc, binder) => Pi(Some(binder.name), binder.ty, acc))
+      self.expect(ColonEqual)
+      let body = self.parse_term()
+      // introduce lambdas for the binders in the body
+      let body_lam = binders.rev_fold(init=body, (acc, binder) => Fun(binder.name, binder.ty, acc))
+      Declaration(name, Definition(ty, body_lam))
+    }
+    tok => raise Message("Expected ':' or '(' in definition, got '\{tok}'")
+  }
 }
 
 fn Parser::parse_inductive(self: Parser) -> TopLevel[STerm] raise ParserError {
@@ -330,7 +348,11 @@ fn Parser::parse_inductive(self: Parser) -> TopLevel[STerm] raise ParserError {
 
   while self.matches(Lparen) {
     let binder = self.parse_binder()
-    params.push((binder.name, binder.ty))
+    let ty = match binder.ty {
+      Some(ty) => ty
+      None => raise Message("Inductive type parameter '\{binder.name}' requires a type annotation")
+    }
+    params.push((binder.name, ty))
   }
 
   self.expect(Colon)
@@ -362,24 +384,28 @@ fn Parser::parse_command(self: Parser) -> TopLevel[STerm] raise ParserError {
 
 struct Binder {
   name: String
-  ty: STerm
+  ty: STerm?
 }
 
 fn Parser::parse_binder(self: Parser) -> Binder raise ParserError {
   let lparen_matched = self.matches(Lparen)
   if lparen_matched { self.advance() }
   let name = self.expect_var()
-  self.expect(Colon)
-  let ty = self.parse_term()
+  let ty = if self.matches(Colon) {
+    self.advance()
+    Some(self.parse_term())
+  } else {
+    None
+  }
   if lparen_matched { self.expect(Rparen) }
   
   { name, ty }
 }
 
-fn Parser::parse_binders(self: Parser) -> Array[Binder] raise ParserError {
+fn Parser::parse_binders(self: Parser, until~: Token) -> Array[Binder] raise ParserError {
   let binders: Array[Binder] = [self.parse_binder()]
 
-  while self.matches(Lparen) {
+  while !self.matches(until) {
     binders.push(self.parse_binder())
   }
 
@@ -397,7 +423,7 @@ fn Parser::parse_term(self: Parser) -> STerm raise ParserError {
 
 fn Parser::parse_fun(self: Parser) -> STerm raise ParserError {
   self.expect(Fun)
-  let binders = self.parse_binders()
+  let binders = self.parse_binders(until=ThickArrow)
   self.expect(ThickArrow)
   let body = self.parse_term()
 
@@ -407,7 +433,7 @@ fn Parser::parse_fun(self: Parser) -> STerm raise ParserError {
 
 fn Parser::parse_forall(self: Parser) -> STerm raise ParserError {
   self.expect(Forall)
-  let binders = self.parse_binders()
+  let binders = self.parse_binders(until=Comma)
   self.expect(Comma)
   let rhs = self.parse_term()
 
@@ -442,7 +468,7 @@ fn Parser::parse_arrow(self: Parser) -> STerm raise ParserError {
     self.advance()
     let rhs = self.parse_term()
     // non-dependent Pi
-    Pi(None, lhs, rhs)
+    Pi(None, Some(lhs), rhs)
   } else {
     lhs
   }
@@ -542,37 +568,41 @@ test "parser" {
   expect_term("Type 321", Sort(322))
   expect_term("Sort 321", Sort(321))
   expect_term("Bool", v("Bool"))
-  expect_term("Bool -> Bool", Pi(None, v("Bool"), v("Bool")))
-  expect_term("Bool -> Bool -> Bool", Pi(None, v("Bool"), Pi(None, v("Bool"), v("Bool"))))
+  expect_term("Bool -> Bool", Pi(None, Some(v("Bool")), v("Bool")))
+  expect_term("Bool -> Bool -> Bool", Pi(None, Some(v("Bool")), Pi(None, Some(v("Bool")), v("Bool"))))
   expect_term("A", v("A"))
   expect_term("P", v("P"))
   expect_term("Q71", v("Q71"))
-  expect_term("P -> Q -> (P -> Bool -> R)",  Pi(None, v("P"), Pi(None, v("Q"), Pi(None, v("P"), Pi(None, v("Bool"), v("R"))))))
+  expect_term("P -> Q -> (P -> Bool -> R)", Pi(None, Some(v("P")), Pi(None, Some(v("Q")), Pi(None, Some(v("P")), Pi(None, Some(v("Bool")), v("R"))))))
   expect_term("true", v("true"))
   expect_term("false", v("false"))
   expect_term("x", v("x"))
   expect_term("(true: Bool)", Ann(v("true"), v("Bool")))
-  expect_term("fun x: Bool => x", Fun("x", v("Bool"), v("x")))
-  expect_term("fun x: Bool => y", Fun("x", v("Bool"), v("y")))
-  expect_term("fun x: A => x", Fun("x", v("A"), v("x")))
-  expect_term("fun x: A => (x: A)", Fun("x", v("A"), Ann(v("x"), v("A"))))
-  expect_term("fun x: A => fun y: B => x", Fun("x", v("A"), Fun("y", v("B"), v("x"))))
+  expect_term("fun x: Bool => x", Fun("x", Some(v("Bool")), v("x")))
+  expect_term("fun x: Bool => y", Fun("x", Some(v("Bool")), v("y")))
+  expect_term("fun x: A => x", Fun("x", Some(v("A")), v("x")))
+  expect_term("fun x: A => (x: A)", Fun("x", Some(v("A")), Ann(v("x"), v("A"))))
+  expect_term("fun x: A => fun y: B => x", Fun("x", Some(v("A")), Fun("y", Some(v("B")), v("x"))))
   expect_term("f x", App(v("f"), v("x")))
-  expect_term("(fun x: Bool => x) true", App(Fun("x", v("Bool"), v("x")), v("true")))
-  expect_term("(fun f: (Bool -> Bool) => f true) (fun x: Bool => x)", App(Fun("f", Pi(None, v("Bool"), v("Bool")), App(v("f"), v("true"))), Fun("x", v("Bool"), v("x"))))
-  expect_term("forall A: Type, A", Pi(Some("A"), Sort(1), v("A")))
-  expect_term("forall b: Bool, b", Pi(Some("b"), v("Bool"), v("b")))
-  expect_term("fun T: Type 2 => forall x: T, T", Fun("T", Sort(3), Pi(Some("x"), v("T"), v("T"))))
-  expect_term("let id := fun x: A => x in id", Let("id", Fun("x", v("A"), v("x")), v("id")))
-  expect_term("fun (b : Bool) (n : Nat) => n", Fun("b", v("Bool"), Fun("n", v("Nat"), v("n"))))
-  expect_term_err("fun x => x)", Expected(expected=Colon, received=ThickArrow))
+  expect_term("(fun x: Bool => x) true", App(Fun("x", Some(v("Bool")), v("x")), v("true")))
+  expect_term("(fun f: (Bool -> Bool) => f true) (fun x: Bool => x)", App(Fun("f", Some(Pi(None, Some(v("Bool")), v("Bool"))), App(v("f"), v("true"))), Fun("x", Some(v("Bool")), v("x"))))
+  expect_term("forall A: Type, A", Pi(Some("A"), Some(Sort(1)), v("A")))
+  expect_term("forall b: Bool, b", Pi(Some("b"), Some(v("Bool")), v("b")))
+  expect_term("fun T: Type 2 => forall x: T, T", Fun("T", Some(Sort(3)), Pi(Some("x"), Some(v("T")), v("T"))))
+  expect_term("let id := fun x: A => x in id", Let("id", Fun("x", Some(v("A")), v("x")), v("id")))
+  expect_term("fun (b : Bool) (n : Nat) => n", Fun("b", Some(v("Bool")), Fun("n", Some(v("Nat")), v("n"))))
+  // unannotated binders
+  expect_term("fun x => x", Fun("x", None, v("x")))
+  expect_term("fun x => fun y => x", Fun("x", None, Fun("y", None, v("x"))))
+  expect_term("forall x, x", Pi(Some("x"), None, v("x")))
+  expect_term_err("fun => x", Message("Expected variable, got 'ThickArrow'"))
   
   expect_top_level(
     "def id : forall A: Type, A := fun A: Type => fun x: A => x",
-    Declaration(Leaf("id"), Definition(Pi(Some("A"), Sort(1), v("A")), Fun("A", Sort(1), Fun("x", v("A"), v("x")))))
+    Declaration(Leaf("id"), Definition(Pi(Some("A"), Some(Sort(1)), v("A")), Fun("A", Some(Sort(1)), Fun("x", Some(v("A")), v("x")))))
   )
 
-  expect_top_level("#eval (fun x: Bool => x) true", Command("eval", [App(Fun("x", v("Bool"), v("x")), v("true"))]))
+  expect_top_level("#eval (fun x: Bool => x) true", Command("eval", [App(Fun("x", Some(v("Bool")), v("x")), v("true"))]))
   
   expect_top_level(
     "inductive False : Prop",
@@ -596,9 +626,9 @@ test "parser" {
         params: [("A", Sort(1))],
         constructors: [
           ("nil", App(App(v("Vec"), v("A")), Var(Path(Leaf("Nat"), "zero")))),
-          ("cons", Pi(None, v("A"), Pi(Some("n"), v("Nat"), Pi(None, App(App(v("Vec"), v("A")), v("n")), App(App(v("Vec"), v("A")), App(Var(Path(Leaf("Nat"), "succ")), v("n"))))))),
+          ("cons", Pi(None, Some(v("A")), Pi(Some("n"), Some(v("Nat")), Pi(None, Some(App(App(v("Vec"), v("A")), v("n"))), App(App(v("Vec"), v("A")), App(Var(Path(Leaf("Nat"), "succ")), v("n"))))))),
         ],
-        ty: Pi(Some("A"), Sort(1), Pi(None, v("Nat"), Sort(1))),
+        ty: Pi(Some("A"), Some(Sort(1)), Pi(None, Some(v("Nat")), Sort(1))),
       }),
     )
   )
