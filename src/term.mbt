@@ -60,6 +60,23 @@ fn Term::occurs_free(self: Term, var_id: FreeVarId) -> Bool {
   }
 }
 
+// Replace syntactic occurrences of `target` in `body` with `BoundVar(idx)`,
+// adjusting idx when going under binders.
+fn abstract_term(body: Term, target: Term, idx: DeBruijnIndex) -> Term {
+  if body.is_alpha_eq(target) {
+    return BoundVar(idx)
+  }
+  
+  match body {
+    Lam(x, ty, b) => Lam(x, abstract_term(ty, target, idx), abstract_term(b, target, idx + 1))
+    Pi(x, a, b) => Pi(x, abstract_term(a, target, idx), abstract_term(b, target, if x is Some(_) { idx + 1 } else { idx }))
+    App(f, arg) => App(abstract_term(f, target, idx), abstract_term(arg, target, idx))
+    Let(x, val, b) => Let(x, abstract_term(val, target, idx), abstract_term(b, target, idx + 1))
+    Ann(l, r) => Ann(abstract_term(l, target, idx), abstract_term(r, target, idx))
+    _ => body
+  }
+}
+
 fn const_occurs_in(c: Name, term: Term) -> Bool {
   match term {
     Const(name) => name == c
@@ -129,7 +146,41 @@ fn Term::fmt(
       }
     }
     FreeVar(name, id) => logger.write_string(if show_var_ids { "fv_\{name}#\{id}" } else { name })
+    Const(Path(Leaf("Nat"), "zero")) => logger.write_char('0')
     Const(name) => logger.write_object(name)
+    App(Const(Path(Leaf("Nat"), "succ")), arg) => {
+      let mut count = 1
+      let mut current_arg = arg
+
+      while current_arg is App(Const(Path(Leaf("Nat"), "succ")), next_arg) {
+        count += 1
+        current_arg = next_arg
+      }
+
+      if current_arg is Const(Path(Leaf("Nat"), "zero")) {
+        logger.write_object(count)
+      } else {
+        // not a numeral, show as current_arg + count
+        current_arg.parens(wrap=!(current_arg is (FreeVar(_) | BoundVar(_))) , bindings~, depth~, logger)
+        logger.write_string(" + ")
+        logger.write_object(count)
+      }
+    }
+    App(App(Const(Path(Leaf("Nat"), "add")), a), b) => {
+      a.parens(wrap=!(a is (FreeVar(_) | BoundVar(_) | Const(_))), bindings~, depth~, logger)
+      logger.write_string(" + ")
+      b.parens(wrap=!(b is (FreeVar(_) | BoundVar(_) | Const(_))), bindings~, depth~, logger)
+    }
+    App(App(Const(Path(Leaf("Nat"), "mul")), a), b) => {
+      a.parens(wrap=!(a is (FreeVar(_) | BoundVar(_) | Const(_))), bindings~, depth~, logger)
+      logger.write_string(" * ")
+      b.parens(wrap=!(b is (FreeVar(_) | BoundVar(_) | Const(_))), bindings~, depth~, logger)
+    }
+    App(App(App(Const(Leaf("Eq")), _ty), a), b) => {
+      a.parens(wrap=!(a is (FreeVar(_) | BoundVar(_) | Const(_))), bindings~, depth~, logger)
+      logger.write_string(" = ")
+      b.parens(wrap=!(b is (FreeVar(_) | BoundVar(_) | Const(_))), bindings~, depth~, logger)
+    }
     App(lhs, rhs) => {
       let lhs_needs_parens = lhs is Lam(_)
       let rhs_needs_parens = rhs is (Lam(_) | App(_))

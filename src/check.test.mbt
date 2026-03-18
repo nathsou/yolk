@@ -458,7 +458,7 @@ test "recursor" {
   assert_has_type(
     "",
     "Eq.rec",
-    "forall A: Type, forall C: forall a: A, forall b: A, Eq A a b -> Prop, (forall x: A, C x x (Eq.refl A x)) -> forall a: A, forall b: A, forall t: Eq A a b, C a b t"
+    "forall A: Type, forall a: A, forall C: forall b: A, Eq A a b -> Prop, C a (Eq.refl A a) -> forall b: A, forall t: Eq A a b, C b t"
   )
 
   // Vec: param + index + recursive arg

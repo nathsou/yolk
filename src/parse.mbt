@@ -550,6 +550,17 @@ fn Parser::parse_atom(self: Parser) -> STerm raise ParserError {
         tok => raise Expected(expected=Rparen, received=tok)
       }
     }
+    Nat(n) => {
+      self.advance()
+      let nat_name = Name::Leaf("Nat")
+      let mut nat = STerm::Var(Path(nat_name, "zero"))
+
+      for _ in 0..<(n.reinterpret_as_int()) {
+        nat = STerm::App(STerm::Var(Path(nat_name, "succ")), nat)
+      }
+
+      nat
+    }
     tok => raise UnexpectedToken(tok)
   }
 }

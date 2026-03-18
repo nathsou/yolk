@@ -79,8 +79,8 @@ pub fn Context::init_default_inductives(self: Context) -> Unit {
     #|  | zero : Nat
     #|  | succ : Nat -> Nat
     #|
-    #|inductive Eq (A : Type) : A -> A -> Prop
-    #|  | refl : forall x : A, Eq A x x
+    #|inductive Eq (A : Type) (a : A) : A -> Prop
+    #|  | refl : Eq A a a
     #|
     #|def Nat.pred (n : Nat) : Nat :=
     #|  match n

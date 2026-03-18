@@ -285,16 +285,41 @@ fn count_fun_binders(sterm: STerm) -> Int {
   }
 }
 
-// Build a constant motive: wrap result_ty in lambdas that mirror the Pi binders of motive_ty.
-// e.g. build_const_motive(Nat -> Type, Nat) = fun _ => Nat
-fn build_const_motive(motive_ty: Term, result_ty: Term) -> Term {
-  match motive_ty {
-    Pi(x, a, b) => {
-      let name = match x { Some(x) => x; None => "_" }
-      Lam(name, a, build_const_motive(b, result_ty))
+// Build a dependent motive by abstracting `terms` from `ret_ty`
+// `terms` contains index terms followed by the scrutinee, matching the Pi binders of motive_ty.
+// e.g. for Nat with scrutinee n and ret_ty = Eq Nat (Nat.add 0 n) n:
+//   build_dependent_motive(Nat -> Prop, ret_ty, [n]) = fun x => Eq Nat (Nat.add 0 x) x
+fn build_dependent_motive(motive_ty: Term, ret_ty: Term, terms: Array[Term]) -> Term {
+  // Collect binder names and types from motive_ty (without opening, to preserve BoundVar structure)
+  let binders: Array[(String, Term)] = []
+  let mut remaining = motive_ty
+  for _ in terms {
+    match remaining {
+      Pi(x, a, b) => {
+        let name = match x { Some(x) => x; None => "_" }
+        binders.push((name, a))
+        remaining = b
+      }
+      _ => break
     }
-    _ => result_ty
   }
+
+  // Build the body by abstracting each term
+  // terms[i] corresponds to binder[i]. In the innermost body (under all binders),
+  // binder[0] is BoundVar(n-1), binder[1] is BoundVar(n-2), ..., binder[n-1] is BoundVar(0).
+  let n = terms.length()
+  let mut body = ret_ty
+  for i in 0..<n {
+    body = abstract_term(body, terms[i], (n - 1 - i).reinterpret_as_uint())
+  }
+
+  // Wrap with Lam binders from innermost to outermost
+  for i = binders.length() - 1; i >= 0; i = i - 1 {
+    let (name, ty) = binders[i]
+    body = Lam(name, ty, body)
+  }
+
+  body
 }
 
 fn Elaborator::elaborate_match(
@@ -338,19 +363,29 @@ fn Elaborator::elaborate_match(
     }
   }
 
-  // The next Pi binder is the motive's type.
+  // The next Pi binder is the motive's type
   let motive_ty = match partial_ty {
     Pi(Some(_), motive_ty, _) | Pi(None, motive_ty, _) => motive_ty
     _ => raise ElaborationError::Message("Recursor type missing motive Pi binder")
   }
 
-  // Elaborate the motive.
-  // - If omitted, build a constant motive from expected_ty.
+  // Elaborate the motive
+  // - If omitted, build a dependent motive that abstracts the scrutinee (and indices) from expected_ty.
   // - If provided as a non-function, wrap it in anonymous lambdas to match motive_ty's arity.
   let motive_elab: Term = match motive {
     None => match expected_ty {
       None => raise ElaborationError::Message("Match expression requires a return type annotation (use 'return <type>') when the expected type is not known from context")
-      Some(ret_ty) => build_const_motive(motive_ty, ret_ty)
+      Some(ret_ty) => {
+        let num_ind_params = ind.params.length()
+        let terms_to_abstract: Array[Term] = []
+
+        for i in num_ind_params..<scrutinee_ty_params.length() {
+          terms_to_abstract.push(scrutinee_ty_params[i])
+        }
+
+        terms_to_abstract.push(scrutinee_elab)
+        build_dependent_motive(motive_ty, ret_ty, terms_to_abstract)
+      }
     }
     Some(m) => {
       let n_pi = count_pi_binders(motive_ty)
@@ -415,6 +450,7 @@ fn Elaborator::elaborate_match(
   for param in scrutinee_ty_params {
     rec_app = App(rec_app, param)
   }
+  
   let rec_motive_partial_app = Term::App(rec_app, motive_elab)
   let rec_motive_full_app = ordered_handlers.fold(init=rec_motive_partial_app, (acc, minor) => App(acc, minor))
   App(rec_motive_full_app, scrutinee_elab)
