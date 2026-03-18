@@ -229,10 +229,6 @@ test "declarations" {
     }
   }
 
-  assert_ok("inductive False : Prop")
-  assert_ok("inductive True : Prop | intro : True")
-  assert_ok("inductive List (A : Type) : Type | nil : List A | cons : A -> List A")
-
   assert_ok((
     #|inductive Tree (A : Type) : Type
     #|  | leaf : A -> Tree A  
@@ -248,11 +244,6 @@ test "declarations" {
     #|inductive Vec (A : Type) : Nat -> Type
     #|  | nil : Vec A Nat.zero
     #|  | cons : A -> forall n : Nat, Vec A n -> Vec A (Nat.succ n)
-  ))
-
-  assert_ok((
-    #|inductive Eq (A : Type) : A -> A -> Prop
-    #|  | refl : forall x : A, Eq A x x
   ))
   
   // duplicate declaration
@@ -285,8 +276,8 @@ test "declarations" {
     #|  | intro : (IllFormed4 -> IllFormed4) -> IllFormed4
   ))
 
+  // non-strictly-positive occurrence
   assert_not_ok((
-    #|inductive False : Prop
     #|inductive P : Prop
     #|  | intro : (P -> False) -> P
   ))
@@ -321,19 +312,6 @@ test "declarations" {
     #|  | mk : (fun T : Type => T -> T) Test
   ))
 
-  // two Prop-valued parameters
-  assert_ok((
-    #|inductive And (A : Prop) (B : Prop) : Prop
-    #|  | intro : A -> B -> And A B
-  ))
-
-  // multiple constructors with Prop-valued parameters
-  assert_ok((
-    #|inductive Or (A : Prop) (B : Prop) : Prop
-    #|  | inl : A -> Or A B
-    #|  | inr : B -> Or A B
-  ))
-
   // no parameters, just an index
   assert_ok((
     #|inductive Fin : Nat -> Type
@@ -355,8 +333,8 @@ test "declarations" {
 
   // swapped parameters in return type
   assert_not_ok((
-    #|inductive Pair (A : Type) (B : Type) : Type
-    #|  | mk : A -> B -> Pair B A
+    #|inductive MyPair (A : Type) (B : Type) : Type
+    #|  | mk : A -> B -> MyPair B A
   ))
 
   // wrong number of indices (missing index)
@@ -423,53 +401,40 @@ test "recursor" {
     }
   }
 
-  // Bool.rec is generated for built-in Bool
   assert_has_type(
     "",
     "Bool.rec",
     "forall C: Bool -> Type, C true -> C false -> forall t: Bool, C t"
   )
 
-  // Nat.rec is generated for built-in Nat
   assert_has_type(
     "",
     "Nat.rec",
     "forall C: Nat -> Type, C Nat.zero -> (forall n: Nat, C n -> C (Nat.succ n)) -> forall t: Nat, C t"
   )
 
-  {
-    let list_ind = 
-        #|inductive List (A : Type) : Type
-        #|  | nil : List A
-        #|  | cons : A -> List A -> List A
-
-    // List.rec: recursor with one recursive IH
-    assert_has_type(
-      list_ind,
-      "List.rec",
-      "forall A: Type, forall C: List A -> Type, C (List.nil A) -> (forall a: A, forall l: List A, C l -> C (List.cons A a l)) -> forall t: List A, C t"
-    )
-
-    assert_ok(
-      list_ind + "\n" + (
-      #|def List.len : forall A : Type, List A -> Nat :=
-      #|  fun (A : Type) =>
-      #|  List.rec A (fun _ : List A => Nat)
-      #|    Nat.zero
-      #|    (fun (h : A) (tl : List A) (ih : Nat) => Nat.succ ih)
-    ))
-  }
-
-  // False: recursor with no minor premises (ex falso quodlibet)
   assert_has_type(
-    "inductive False : Prop",
+    "",
+    "List.rec",
+    "forall A: Type, forall C: List A -> Type, C (List.nil A) -> (forall a: A, forall l: List A, C l -> C (List.cons A a l)) -> forall t: List A, C t"
+  )
+
+  assert_ok((
+    #|def My.len : forall A : Type, List A -> Nat :=
+    #|  fun (A : Type) =>
+    #|  List.rec A (fun _ : List A => Nat)
+    #|    Nat.zero
+    #|    (fun (h : A) (tl : List A) (ih : Nat) => Nat.succ ih)
+  ))
+
+  assert_has_type(
+    "",
     "False.rec",
     "forall C: False -> Prop, forall t: False, C t"
   )
 
-  // True: recursor with one constructor and no args
   assert_has_type(
-    "inductive True : Prop | intro : True",
+    "",
     "True.rec",
     "forall C: True -> Prop, C True.intro -> forall t: True, C t"
   )
@@ -490,10 +455,8 @@ test "recursor" {
   )
 
   // Eq: recursor with indices, no recursive args
-  assert_has_type((
-      #|inductive Eq (A : Type) : A -> A -> Prop
-      #|  | refl : forall x : A, Eq A x x
-    ),
+  assert_has_type(
+    "",
     "Eq.rec",
     "forall A: Type, forall C: forall a: A, forall b: A, Eq A a b -> Prop, (forall x: A, C x x (Eq.refl A x)) -> forall a: A, forall b: A, forall t: Eq A a b, C a b t"
   )
@@ -534,20 +497,14 @@ test "recursor" {
   )
 
   // And: two Prop params, simple constructor
-  assert_has_type((
-      #|inductive And (A : Prop) (B : Prop) : Prop
-      #|  | intro : A -> B -> And A B
-    ),
+  assert_has_type(
+    "",
     "And.rec",
     "forall A: Prop, forall B: Prop, forall C: And A B -> Prop, (forall a: A, forall b: B, C (And.intro A B a b)) -> forall t: And A B, C t"
   )
 
-  // Or: two constructors
-  assert_has_type((
-      #|inductive Or (A : Prop) (B : Prop) : Prop
-      #|  | inl : A -> Or A B
-      #|  | inr : B -> Or A B
-    ),
+  assert_has_type(
+    "",
     "Or.rec",
     "forall A: Prop, forall B: Prop, forall C: Or A B -> Prop, (forall a: A, C (Or.inl A B a)) -> (forall b: B, C (Or.inr A B b)) -> forall t: Or A B, C t"
   )
@@ -562,13 +519,7 @@ test "recursor" {
   )
 
   // Recursor is well-typed
-  assert_ok((
-    #|inductive List (A : Type) : Type
-    #|  | nil : List A
-    #|  | cons : A -> List A -> List A
-    #|#valid List.rec
-  ))
-
+  assert_ok("#valid List.rec")
   assert_ok("#valid Nat.rec")
   assert_ok("#valid Bool.rec")
 
@@ -577,25 +528,6 @@ test "recursor" {
     #|inductive Dummy : Type
     #|  | mk : Dummy
     #|  | rec : Dummy
-  ))
-
-  assert_ok((
-    #|inductive False : Prop
-    #|def False.elim : forall P : Prop, forall f : False, P :=
-    #|  fun P : Prop => False.rec (fun _ : False => P)
-  ))
-
-  assert_ok((
-    #|inductive Pair (A : Type) (B : Type) : Type
-    #|  | mk : A -> B -> Pair A B
-    #|
-    #|def Pair.fst : forall (A : Type) (B : Type), Pair A B -> A :=
-    #|  fun (A : Type) (B : Type) =>
-    #|    Pair.rec A B (fun _ : Pair A B => A) (fun a : A => fun b : B => a)
-    #|
-    #|def Pair.snd : forall (A : Type) (B : Type), Pair A B -> B :=
-    #|  fun (A : Type) (B : Type) =>
-    #|    Pair.rec A B (fun _ : Pair A B => B) (fun a : A => fun b : B => b)
   ))
 }
 
@@ -649,52 +581,34 @@ test "iota reduction" {
   let five = "Nat.succ (Nat.succ (Nat.succ (Nat.succ (Nat.succ Nat.zero))))"
   assert_nf("(\{nat_add}) (\{two}) (\{three})", five)
 
-  let list_program = (
-    #|inductive List (A : Type) : Type
-    #|  | nil : List A
-    #|  | cons : A -> List A -> List A
-  )
-
-  assert_nf_with_program(
-    list_program,
+  assert_nf(
     "List.rec Bool (fun _ : List Bool => Nat) Nat.zero (fun (h : Bool) (tl : List Bool) (ih : Nat) => Nat.succ ih) (List.nil Bool)",
     "Nat.zero"
   )
 
   // len [true, false] = 2
-  assert_nf_with_program(
-    list_program,
+  assert_nf(
     "List.rec Bool (fun _ : List Bool => Nat) Nat.zero (fun (h : Bool) (tl : List Bool) (ih : Nat) => Nat.succ ih) (List.cons Bool true (List.cons Bool false (List.nil Bool)))",
     "Nat.succ (Nat.succ Nat.zero)"
   )
 
-  let pair_program = (
-    #|inductive Pair (A : Type) (B : Type) : Type
-    #|  | mk : A -> B -> Pair A B
-  )
-
   // Pair.fst (Pair.mk true zero) => true
-  assert_nf_with_program(
-    pair_program,
+  assert_nf(
     "Pair.rec Bool Nat (fun _ : Pair Bool Nat => Bool) (fun (a : Bool) (b : Nat) => a) (Pair.mk Bool Nat true Nat.zero)",
     "true"
   )
 
   // Pair.snd (Pair.mk true zero) => zero
-  assert_nf_with_program(
-    pair_program,
+  assert_nf(
     "Pair.rec Bool Nat (fun _ : Pair Bool Nat => Nat) (fun (a : Bool) (b : Nat) => b) (Pair.mk Bool Nat true Nat.zero)",
     "Nat.zero"
   )
 
   // False.rec: stuck (no constructor), normalises to itself
-  {
-    let false_program = "inductive False : Prop"
-    let ctx = elab_program(false_program)
-    let term = elab_term("fun P : Prop => False.rec (fun _ : False => P)", ctx=Some(ctx)).1
-    // Should not crash
-    let _ = ctx.normalise(term)
-  }
+  assert_nf(
+    "fun P : Prop => False.rec (fun _ : False => P)",
+    "fun P : Prop => False.rec (fun _ : False => P)"
+  )
 
   // Tree: two recursive arguments
   let tree_program =
@@ -722,39 +636,4 @@ test "iota reduction" {
     "Tree.size Nat (Tree.node Nat (Tree.leaf Nat Nat.zero) (Tree.leaf Nat (Nat.succ Nat.zero)))",
     "Nat.succ (Nat.succ Nat.zero)"
   )
-
-  {
-    let program = (
-      #|def Nat.add (m : Nat) : Nat -> Nat :=
-      #|  Nat.rec (fun _ => Nat) m (fun _ ih => Nat.succ ih)
-      #|
-      #|def three : Nat := Nat.succ (Nat.succ (Nat.succ Nat.zero))
-      #|def five : Nat := Nat.succ (Nat.succ (Nat.succ (Nat.succ (Nat.succ Nat.zero))))
-      #|
-      #|def Bool.not : Bool -> Bool :=
-      #|  Bool.rec (fun _ => Bool) false true
-    )
-
-    try elab_program(program) |> ignore catch {
-      err => fail("Invalid program: '\{err}'\n\{program}")
-    }
-  }
-
-  {
-    let program = (
-      #|def Nat.pred (n : Nat) : Nat :=
-      #|  match n return (fun _ => Nat)
-      #|    | zero => Nat.zero
-      #|    | succ p _ => p
-    )
-    
-    let ctx = elab_program(program)
-    let term = elab_term("Nat.pred (Nat.succ (Nat.succ (Nat.succ Nat.zero)))", ctx=Some(ctx)).1
-    let result = ctx.normalise(term)
-    let expected = elab_term("Nat.succ (Nat.succ Nat.zero)", ctx=Some(ctx)).1
-
-    if !result.is_alpha_eq(expected) {
-      fail("Expected Nat.pred 3 = 2, got '\{result}'")
-    }
-  }
 }

@@ -29,51 +29,148 @@ pub fn Context::new() -> Context {
 }
 
 pub fn Context::init_default_inductives(self: Context) -> Unit {
-  let bool_ind: InductiveDecl[Term] = {
-    params: [],
-    constructors: [
-      ("true", Const(Leaf("Bool"))),
-      ("false", Const(Leaf("Bool"))),
-    ],
-    ty: Sort(1),
+  // define Bool with constructors true and false instead of Bool.{true, false}
+  {
+    let bool_ind: InductiveDecl[Term] = {
+      params: [],
+      constructors: [
+        ("true", Const(Leaf("Bool"))),
+        ("false", Const(Leaf("Bool"))),
+      ],
+      ty: Sort(1),
+    }
+    
+    try! self.env.add(Leaf("Bool"), Inductive(bool_ind))
+
+    try! self.env.add(Leaf("true"), Constructor(
+      ind=bool_ind,
+      ty=Const(Leaf("Bool")),
+    ))
+
+    try! self.env.add(Leaf("false"), Constructor(
+      ind=bool_ind,
+      ty=Const(Leaf("Bool")),
+    ))
+
+    try! self.generate_recursor(Leaf("Bool"), bool_ind)
   }
-  
-  try! self.env.add(Leaf("Bool"), Inductive(bool_ind))
 
-  try! self.env.add(Leaf("true"), Constructor(
-    ind=bool_ind,
-    ty=Const(Leaf("Bool")),
-  ))
+  let builtin =
+    #|def Bool.not (q : Bool) : Bool :=
+    #|  match q | true => false | false => true
+    #|
+    #|inductive True : Prop
+    #|  | intro : True
+    #|
+    #|inductive False : Prop
+    #|
+    #|def False.elim (P : Prop) : False -> P := False.rec (fun _ => P)
+    #|
+    #|def Not (P : Prop) : Prop := P -> False
+    #|
+    #|def Not.intro (P : Prop) (h : P -> False) : Not P := h
+    #|
+    #|def Not.elim (A : Prop) (P : Prop) (hnp : Not P) (hp : P) : A :=
+    #|  False.elim A (hnp hp)
+    #|
+    #|def absurd (A : Prop) (f : False) : A := False.elim A f
+    #|
+    #|inductive Nat : Type
+    #|  | zero : Nat
+    #|  | succ : Nat -> Nat
+    #|
+    #|inductive Eq (A : Type) : A -> A -> Prop
+    #|  | refl : forall x : A, Eq A x x
+    #|
+    #|def Nat.pred (n : Nat) : Nat :=
+    #|  match n
+    #|    | zero => Nat.zero
+    #|    | succ m _ => m
+    #|
+    #|def Nat.add (m : Nat) : Nat -> Nat :=
+    #|  Nat.rec (fun _ => Nat) m (fun _ ih => Nat.succ ih)
+    #|
+    #|def Nat.mul (m : Nat) : Nat -> Nat :=
+    #|  Nat.rec (fun _ => Nat) Nat.zero (fun _ ih => Nat.add m ih)
+    #|
+    #|inductive Pair (A : Type) (B : Type) : Type
+    #|  | mk : A -> B -> Pair A B
+    #|
+    #|def Pair.fst (A : Type) (B : Type) : Pair A B -> A :=
+    #|  Pair.rec A B (fun _ => A) (fun a _ => a)
+    #|
+    #|def Pair.snd (A : Type) (B : Type) : Pair A B -> B :=
+    #|  Pair.rec A B (fun _ => B) (fun _ b => b)
+    #|
+    #|inductive List (A : Type) : Type
+    #|  | nil : List A
+    #|  | cons : A -> List A -> List A
+    #|
+    #|def List.len (A : Type) (lst : List A) : Nat :=
+    #|  match lst
+    #|    | nil => Nat.zero
+    #|    | cons _ tl ih => Nat.succ ih
+    #|
+    #|inductive Option (A : Type) : Type
+    #|  | none : Option A
+    #|  | some : A -> Option A
+    #|
+    #|def Option.map (A : Type) (B : Type) (f : A -> B) (opt : Option A) : Option B :=
+    #|  match opt
+    #|    | none => Option.none B
+    #|    | some a => Option.some B (f a)
+    #|
+    #|def List.head (A : Type) (lst : List A) : Option A :=
+    #|  match lst
+    #|    | nil => Option.none A
+    #|    | cons h _ _ => Option.some A h
+    #|
+    #|def List.tail (A : Type) (lst : List A) : List A :=
+    #|  match lst
+    #|    | nil => lst
+    #|    | cons _ tl _ => tl
+    #|
+    #|def List.map (A : Type) (B : Type) (f : A -> B) (lst : List A) : List B :=
+    #|  match lst
+    #|    | nil => List.nil B
+    #|    | cons h tl ih => List.cons B (f h) ih
+    #|
+    #|inductive And (P : Prop) (Q : Prop) : Prop
+    #|  | intro : P -> Q -> And P Q
+    #|
+    #|def And.elim_left (P : Prop) (Q : Prop) : And P Q -> P :=
+    #|  And.rec P Q (fun _ => P) (fun p _ => p)
+    #|
+    #|def And.elim_right (P : Prop) (Q : Prop) : And P Q -> Q :=
+    #|  And.rec P Q (fun _ => Q) (fun _ q => q)
+    #|
+    #|inductive Or (P : Prop) (Q : Prop) : Prop
+    #|  | inl : P -> Or P Q
+    #|  | inr : Q -> Or P Q
+    #|
+    #|inductive Unit : Type
+    #|  | unit : Unit
+    #|
+    #|inductive Either (A : Type) (B : Type) : Type
+    #|  | left : A -> Either A B
+    #|  | right : B -> Either A B
+    #|
+    #|def Either.is_left (A : Type) (B : Type) (e : Either A B) : Bool :=
+    #|  match e
+    #|    | left _ => true
+    #|    | right _ => false
+    #|
+    #|def Either.is_right (A : Type) (B : Type) (e : Either A B) : Bool :=
+    #|  match e
+    #|    | left _ => false
+    #|    | right _ => true
 
-  try! self.env.add(Leaf("false"), Constructor(
-    ind=bool_ind,
-    ty=Const(Leaf("Bool")),
-  ))
-
-  let nat_ind: InductiveDecl[Term] = {
-    params: [],
-    constructors: [
-      ("zero", Const(Leaf("Nat"))),
-      ("succ", Pi(None, Const(Leaf("Nat")), Const(Leaf("Nat")))),
-    ],
-    ty: Sort(1),
-  }
-  
-  try! self.env.add(Leaf("Nat"), Inductive(nat_ind))
-
-  try! self.env.add(Path(Leaf("Nat"), "zero"), Constructor(
-    ind=nat_ind,
-    ty=Const(Leaf("Nat")),
-  ))
-
-  try! self.env.add(Path(Leaf("Nat"), "succ"), Constructor(
-    ind=nat_ind,
-    ty=Pi(None, Const(Leaf("Nat")), Const(Leaf("Nat"))),
-  ))
-
-  // Generate recursors for built-in inductive types
-  try! self.generate_recursor(Leaf("Bool"), bool_ind)
-  try! self.generate_recursor(Leaf("Nat"), nat_ind)
+    let lexer = Lexer::new(builtin)
+    let tokens = try! lexer.tokenise()
+    let parser = Parser::new(tokens)
+    let program = try! parser.parse()
+    let elaborator = Elaborator::from(self)
+    try! elaborator.elaborate(program)
 }
 
 pub fn Context::add_decl(self: Context, name: Name, decl: Decl[Term]) -> Unit raise TypeCheckError {
@@ -966,4 +1063,3 @@ pub fn Context::is_def_eq(self: Context, term: Term, expected: Term) -> Bool rai
     }
   }
 }
-

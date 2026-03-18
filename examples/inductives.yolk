@@ -3,33 +3,6 @@ def id (A : Type) (x : A) : A := x
 
 #valid id Bool true
 
-inductive Pair (A : Type) (B : Type) : Type
-  | mk : A -> B -> Pair A B
-
-def Pair.fst (A : Type) (B : Type) : Pair A B -> A :=
-  Pair.rec A B (fun _ => A) (fun a _ => a)
-
-def Pair.snd (A : Type) (B : Type) : Pair A B -> B :=
-  Pair.rec A B (fun _ => B) (fun _ b => b)
-
-inductive List (A : Type) : Type
-  | nil : List A
-  | cons : A -> List A -> List A
-
-inductive Option (A : Type) : Type
-  | none : Option A
-  | some : A -> Option A
-
-def List.head (A : Type) (lst : List A) : Option A :=
-  match lst return (fun _ => Option A)
-    | nil => Option.none A
-    | cons h _ _ => Option.some A h
-
-def List.tail (A : Type) (lst : List A) : List A :=
-  match lst return (fun _ => List A)
-    | nil => lst
-    | cons _ tl _ => tl
-
 #eval (
   let lst := List.cons Bool true (List.cons Bool false (List.nil Bool)) in
   Pair.mk (Option Bool) (List Bool) (List.head Bool lst) (List.tail Bool lst)
@@ -38,29 +11,6 @@ def List.tail (A : Type) (lst : List A) : List A :=
 inductive Vec (A : Type) : Nat -> Type
   | nil : Vec A Nat.zero
   | cons : A -> forall n : Nat, Vec A n -> Vec A (Nat.succ n)
-
-inductive True : Prop
-  | intro : True
-
-inductive False : Prop
-
-def False.elim (P : Prop) : False -> P :=
-  False.rec (fun _ => P)
-
-inductive And (P : Prop) (Q : Prop) : Prop
-  | intro : P -> Q -> And P Q
-
-def And.elim_left (P : Prop) (Q : Prop) : And P Q -> P :=
-  And.rec P Q (fun _ => P) (fun p _ => p)
-
-def And.elim_right (P : Prop) (Q : Prop) : And P Q -> Q :=
-  And.rec P Q (fun _ => Q) (fun _ q => q)
-
-#valid fun (A : Prop) (B : Prop) (ab : And A B) => And.elim_left A B ab
-
-inductive Or (P : Prop) (Q : Prop) : Prop
-  | inl : P -> Or P Q
-  | inr : Q -> Or P Q
 
 def one : Nat := Nat.succ Nat.zero
 def two : Nat := Nat.succ one
@@ -74,15 +24,6 @@ def vec3 : Vec Bool three := Vec.cons Bool false two vec2
 
 #valid vec3
 
-def Not (P : Prop) : Prop := P -> False
-
-def Not.intro (P : Prop) (h : P -> False) : Not P := h
-
-def Not.elim (A : Prop) (P : Prop) (hnp : Not P) (hp : P) : A :=
-  False.elim A (hnp hp)
-
-def absurd (A : Prop) (f : False) : A := False.elim A f
-
 #valid Not.intro (And True False)
 #valid Vec.cons
 
@@ -90,15 +31,7 @@ inductive Tree (A : Type) : Type
   | leaf : A -> Tree A
   | node : Tree A -> Tree A -> Tree A
 
-inductive Eq (A : Type) : A -> A -> Prop
-  | refl : forall x : A, Eq A x x
-
 #valid Eq.refl Nat Nat.zero
-
-def Nat.pred (n : Nat) : Nat :=
-  match n return Nat
-    | zero => Nat.zero
-    | succ m _ => m
 
 #invalid Nat.pred true
 #invalid Nat.rec (fun _ : Nat => Nat) true (fun m : Nat => fun ih : Nat => m)
@@ -110,28 +43,12 @@ def pair : Pair Bool Nat := Pair.mk Bool Nat true three
 #valid Pair.fst Bool Nat pair
 #valid Pair.snd Bool Nat pair
 
-def List.len (A : Type) : List A -> Nat :=
-  List.rec A (fun _ => Nat)
-      Nat.zero
-      (fun h tl ih => Nat.succ ih)
-
 #eval List.len Nat (List.cons Nat Nat.zero (List.cons Nat one (List.cons Nat two (List.cons Nat three (List.nil Nat)))))
-
-def Nat.add (m : Nat) : Nat -> Nat :=
-  Nat.rec (fun _ => Nat) m (fun _ ih => Nat.succ ih)
 
 def five : Nat := Nat.add two three
 #eval five
 
-def Bool.not : Bool -> Bool :=
-  Bool.rec (fun _ => Bool) false true
-
 #eval Pair.mk Bool Bool (Bool.not true) (Bool.not false)
-
-def Nat.mul (m : Nat) : Nat -> Nat :=
-  Nat.rec (fun _ => Nat)
-    Nat.zero
-    (fun _ ih => Nat.add m ih)
 
 #eval Nat.mul three two
 
@@ -157,8 +74,5 @@ def Tree.size (A : Type) (t : Tree A) : Nat :=
   let tree := Tree.node Nat (Tree.leaf Nat one) (Tree.node Nat (Tree.leaf Nat two) (Tree.leaf Nat three)) in
   Tree.size Nat tree
 )
-
-inductive Unit : Type
-  | unit : Unit
 
 def Vec.len (A : Type) (n : Nat) (v : Vec A n) : Nat := n
