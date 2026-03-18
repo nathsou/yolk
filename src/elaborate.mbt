@@ -201,6 +201,109 @@ pub fn Elaborator::elaborate_term(self: Elaborator, term: STerm) -> Term raise {
       let e_elab = self.elaborate_term_check(e, ty_elab)
       Ann(e_elab, ty_elab)
     }
+    Match(scrutinee~, motive~, cases~) => {
+      // build a recursor application from the motive and handlers
+      let scrutinee_elab = self.elaborate_term(scrutinee)
+      let scrutinee_ty = self.ctx.infer(scrutinee_elab)
+      let scrutinee_ty_whnf = self.ctx.whnf(scrutinee_ty)
+      let (scrutinee_ty_head, scrutinee_ty_params) = scrutinee_ty_whnf.collect_app_args()
+      let scrutinee_ty_name = match scrutinee_ty_head {
+        Const(name) => name.root()
+        other => raise ElaborationError::Message("Expected scrutinee of 'match' to have an inductive type, got '\{other}'")
+      }
+
+      let ind = match self.ctx.env.decls.get(Leaf(scrutinee_ty_name)) {
+        Some(Inductive(ind)) => ind
+        _ => raise ElaborationError::Message("Expected scrutinee of 'match' to have an inductive type, got '\{scrutinee_ty}'")
+      }
+
+      if ind.constructors.length() != cases.length() {
+        raise ElaborationError::Message("Number of match cases (\{cases.length()}) does not match number of constructors for type '\{scrutinee_ty_name}' (\{ind.constructors.length()})")
+      }
+
+      let rec_name = Name::Path(Leaf(scrutinee_ty_name), "rec")
+      let (rec_ty, num_minors) = match self.ctx.env.decls.get(rec_name) {
+        Some(Recursor(ty~, num_minors~, ..)) => (ty, num_minors)
+        _ => raise ElaborationError::Message("No recursor found for inductive type '\{scrutinee_ty_name}'")
+      }
+
+      // Derive minor premise types from the closed recursor type by applying params and motive
+      let mut partial_ty = rec_ty
+
+      // Apply each param from the scrutinee's type
+      for param in scrutinee_ty_params {
+        match partial_ty {
+          Pi(Some(_), _, body) => { partial_ty = instantiate(body, 0, param) }
+          Pi(None, _, body) => { partial_ty = body }
+          _ => raise ElaborationError::Message("Recursor type has fewer params than expected")
+        }
+      }
+
+      // Extract the motive's expected type from the recursor, then elaborate with that context
+      // so unannotated lambdas in the motive can be inferred
+      let motive_ty = match partial_ty {
+        Pi(Some(_), motive_ty, _) | Pi(None, motive_ty, _) => motive_ty
+        _ => raise ElaborationError::Message("Recursor type missing motive Pi binder")
+      }
+
+      let motive_elab = self.elaborate_term_check(motive, motive_ty)
+
+      // Apply the motive
+      match partial_ty {
+        Pi(Some(_), _, body) => { partial_ty = instantiate(body, 0, motive_elab) }
+        Pi(None, _, body) => { partial_ty = body }
+        _ => raise ElaborationError::Message("Recursor type missing motive Pi binder")
+      }
+
+      // Extract one minor premise type per constructor from the leading Pi binders
+      let minor_tys: Array[Term] = []
+      for _ in 0..<num_minors {
+        match partial_ty {
+          Pi(Some(_), minor_ty, rest) => {
+            minor_tys.push(minor_ty)
+            partial_ty = instantiate(rest, 0, Sort(0)) // dummy: minors don't depend on each other
+          }
+          Pi(None, minor_ty, rest) => {
+            minor_tys.push(minor_ty)
+            partial_ty = rest
+          }
+          _ => raise ElaborationError::Message("Recursor type missing minor Pi binder")
+        }
+      }
+
+      // Build a map from constructor name to minor premise type (constructors are in declaration order)
+      let minor_ty_by_ctor: Map[String, Term] = Map::from_array(
+        ind.constructors.mapi((i, ctor) => (ctor.0, minor_tys[i]))
+      )
+
+      let minor_premises_by_ctor: Map[String, Term] = Map::from_array(cases.map(case => {
+        let fun = case.args.rev_fold(init=case.body, (acc, arg) => Fun(arg, None, acc))
+        let minor_ty = match minor_ty_by_ctor.get(case.ctor) {
+          Some(ty) => ty
+          None => raise ElaborationError::Message("Unknown constructor '\{case.ctor}' for type '\{scrutinee_ty_name}'")
+        }
+        
+        (case.ctor, self.elaborate_term_check(fun, minor_ty))
+      }))
+
+      // ensure the handlers are in the same order as the constructors in the inductive declaration
+      let ordered_handlers: Array[Term] = ind.constructors.map(ctor => {
+        match minor_premises_by_ctor.get(ctor.0) {
+          Some(handler) => handler
+          None => raise ElaborationError::Message("No handler provided for constructor '\{ctor.0}' in 'match' expression")
+        }
+      })
+
+      // Apply params from scrutinee type, then motive, then minor premises, then scrutinee
+      let mut rec_app: Term = Const(rec_name)
+      for param in scrutinee_ty_params {
+        rec_app = App(rec_app, param)
+      }
+      
+      let rec_motive_partial_app = Term::App(rec_app, motive_elab)
+      let rec_motive_full_app = ordered_handlers.fold(init=rec_motive_partial_app, (acc, minor) => App(acc, minor))
+      App(rec_motive_full_app, scrutinee_elab)
+    }
   }
 }
 

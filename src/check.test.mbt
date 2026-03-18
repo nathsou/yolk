@@ -742,8 +742,10 @@ test "iota reduction" {
 
   {
     let program = (
-      #|def Nat.pred : Nat -> Nat :=
-      #|  Nat.rec (fun _ => Nat) Nat.zero (fun m _ => m)
+      #|def Nat.pred (n : Nat) : Nat :=
+      #|  match n return (fun _ => Nat)
+      #|    | zero => Nat.zero
+      #|    | succ p _ => p
     )
     
     let ctx = elab_program(program)

@@ -7,6 +7,7 @@ pub enum STerm {
   Pi(String?, STerm?, STerm)
   Let(String, STerm, STerm)
   Ann(STerm, STerm)
+  Match(scrutinee~: STerm, motive~: STerm, cases~: Array[MatchCase])
 } derive(Eq)
 
 pub enum Decl[T] {
@@ -31,6 +32,12 @@ pub struct InductiveDecl[T] {
   params: Array[(String, T)]
   constructors: Array[(String, T)]
   ty: T
+} derive(Eq)
+
+pub struct MatchCase {
+  ctor: String
+  args: Array[String]
+  body: STerm
 } derive(Eq)
 
 pub fn[T] Decl::ty(self: Decl[T]) -> T {
@@ -182,6 +189,27 @@ pub impl Show for STerm with output(self: STerm, logger: &Logger) {
       e.parens(e is (App(_) | Fun(_) | Pi(_) | Let(_)), logger)
       logger.write_string(": ")
       ty.output(logger)
+    }
+    Match(scrutinee~, motive~, cases~) => {
+      logger.write_string("match ")
+      scrutinee.parens(scrutinee is (App(_) | Fun(_) | Pi(_) | Let(_)), logger)
+      logger.write_string(" return ")
+      motive.parens(motive is (App(_) | Fun(_) | Pi(_) | Let(_)), logger)
+      logger.write_char('\n')
+
+      for case in cases {
+        logger.write_string("  | ")
+        logger.write_string(case.ctor)
+
+        for arg in case.args {
+          logger.write_char(' ')
+          logger.write_string(arg)
+        }
+
+        logger.write_string(" => ")
+        case.body.output(logger)
+        logger.write_char('\n')
+      }
     }
   }
 }

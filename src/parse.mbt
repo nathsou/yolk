@@ -1,7 +1,7 @@
 
 pub enum Token {
-  Lparen; Rparen; ThickArrow; Arrow; Colon; Comma; Dot; Hash; Pipe
-  Sort; Prop; Type; Fun; Forall; Let; In; ColonEqual; Def; Axiom; Inductive
+  Lparen; Rparen; ThickArrow; Arrow; Colon; Comma; Dot; Hash; Pipe; ColonEqual
+  Sort; Prop; Type; Fun; Forall; Let; In; Def; Axiom; Inductive; Match; Return
   Nat(UInt); Var(String); Path(Name)
 } derive(Show, Eq)
 
@@ -158,6 +158,8 @@ fn Lexer::next(self: Lexer) -> LexerResult {
           "in" => Yay(In)
           "def" => Yay(Def)
           "inductive" => Yay(Inductive)
+          "match" => Yay(Match)
+          "return" => Yay(Return)
           "Sort" => Yay(Sort)
           "Prop" => Yay(Prop)
           "Type" => Yay(Type)
@@ -417,6 +419,7 @@ fn Parser::parse_term(self: Parser) -> STerm raise ParserError {
     Fun => self.parse_fun()
     Forall => self.parse_forall()
     Let => self.parse_let()
+    Match => self.parse_match()
     _ => self.parse_arrow()
   }
 }
@@ -449,6 +452,31 @@ fn Parser::parse_let(self: Parser) -> STerm raise ParserError {
   self.expect(In)
   let body = self.parse_term()
   Let(v, val, body)
+}
+
+fn Parser::parse_match(self: Parser) -> STerm raise ParserError {
+  self.expect(Match)
+  let scrutinee = self.parse_term()
+  self.expect(Return)
+  let motive = self.parse_term()
+  let cases: Array[MatchCase] = []
+
+  while self.matches(Pipe) {
+    self.advance()
+    let ctor_name = self.expect_var()
+    let args: Array[String] = []
+
+    while self.peek_safe() is Some(Var(arg)) {
+      args.push(arg)
+      self.advance()
+    }
+
+    self.expect(ThickArrow)
+    let body = self.parse_term()
+    cases.push({ ctor: ctor_name, args, body })
+  }
+
+  Match(scrutinee~, motive~, cases~)
 }
 
 fn Parser::parse_app(self: Parser) -> STerm raise ParserError {
