@@ -96,7 +96,7 @@ inductive Eq (A : Type) : A -> A -> Prop
 #valid Eq.refl Nat Nat.zero
 
 def Nat.pred (n : Nat) : Nat :=
-  match n return (fun _ => Nat)
+  match n return Nat
     | zero => Nat.zero
     | succ m _ => m
 
@@ -146,10 +146,10 @@ def Nat.mul (m : Nat) : Nat -> Nat :=
 )
 
 def Tree.size (A : Type) (t : Tree A) : Nat :=
-  match t return (fun _ => Nat)
+  match t
     | leaf _ => one
     | node l r lih rih =>
-      match lih return (fun _ => Nat)
+      match lih
         | zero => rih
         | succ _ ih => Nat.succ ih
 

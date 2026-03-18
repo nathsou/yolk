@@ -7,7 +7,7 @@ pub enum STerm {
   Pi(String?, STerm?, STerm)
   Let(String, STerm, STerm)
   Ann(STerm, STerm)
-  Match(scrutinee~: STerm, motive~: STerm, cases~: Array[MatchCase])
+  Match(scrutinee~: STerm, motive~: STerm?, cases~: Array[MatchCase])
 } derive(Eq)
 
 pub enum Decl[T] {
@@ -193,8 +193,12 @@ pub impl Show for STerm with output(self: STerm, logger: &Logger) {
     Match(scrutinee~, motive~, cases~) => {
       logger.write_string("match ")
       scrutinee.parens(scrutinee is (App(_) | Fun(_) | Pi(_) | Let(_)), logger)
-      logger.write_string(" return ")
-      motive.parens(motive is (App(_) | Fun(_) | Pi(_) | Let(_)), logger)
+      
+      if motive is Some(m) {
+        logger.write_string(" return ")
+        m.parens(m is (App(_) | Fun(_) | Pi(_) | Let(_)), logger)
+      }
+
       logger.write_char('\n')
 
       for case in cases {

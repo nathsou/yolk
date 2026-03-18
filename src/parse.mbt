@@ -457,8 +457,12 @@ fn Parser::parse_let(self: Parser) -> STerm raise ParserError {
 fn Parser::parse_match(self: Parser) -> STerm raise ParserError {
   self.expect(Match)
   let scrutinee = self.parse_term()
-  self.expect(Return)
-  let motive = self.parse_term()
+  let motive: STerm? = if self.matches(Return) {
+    self.advance()
+    Some(self.parse_term())
+  } else {
+    None
+  }
   let cases: Array[MatchCase] = []
 
   while self.matches(Pipe) {
