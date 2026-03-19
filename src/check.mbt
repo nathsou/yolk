@@ -79,8 +79,20 @@ pub fn Context::init_default_inductives(self: Context) -> Unit {
     #|  | zero : Nat
     #|  | succ : Nat -> Nat
     #|
+    #|-- the = relation is defined inductively as the smallest reflexive relation
     #|inductive Eq (A : Type) (a : A) : A -> Prop
     #|  | refl : Eq A a a
+    #|
+    #|-- the <= relation is defined inductively as the smallest reflexive and transitive relation compatible with the successor
+    #|inductive Le (a : Nat) : Nat -> Prop
+    #|  | refl : Le a a
+    #|  | step : forall b : Nat, Le a b -> Le a (b + 1)
+    #|
+    #|def Lt (a b : Nat) : Prop := Le (a + 1) b
+    #|
+    #|def Ge (a b : Nat) : Prop := Le b a
+    #|
+    #|def Gt (a b : Nat) : Prop := Lt b a
     #|
     #|def Nat.pred (n : Nat) : Nat :=
     #|  match n
@@ -91,7 +103,7 @@ pub fn Context::init_default_inductives(self: Context) -> Unit {
     #|  Nat.rec (fun _ => Nat) m (fun _ ih => Nat.succ ih)
     #|
     #|def Nat.mul (m : Nat) : Nat -> Nat :=
-    #|  Nat.rec (fun _ => Nat) Nat.zero (fun _ ih => Nat.add m ih)
+    #|  Nat.rec (fun _ => Nat) Nat.zero (fun _ ih => Nat.add ih m)
     #|
     #|inductive Pair (A : Type) (B : Type) : Type
     #|  | mk : A -> B -> Pair A B

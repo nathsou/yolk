@@ -24,7 +24,7 @@ fn Lexer::advance(self: Lexer) -> Unit {
 }
 
 fn is_alpha(c: Char) -> Bool {
-  (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
+  (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == '\''
 }
 
 fn is_digit(c: Char) -> Bool {
