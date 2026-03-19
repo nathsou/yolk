@@ -17,7 +17,7 @@ def congr_arg (A B : Type) (a1 a2 : A) (f : A -> B) (h : Eq A a1 a2) : Eq B (f a
 
 -- equality is transitive: if a = b and b = c, then a = c
 def Eq.trans (A : Type) (a b c : A) (h1 : Eq A a b) (h2 : Eq A b c) : Eq A a c :=
-  Eq.subst A b c (fun x => Eq A a x) h2 h1
+  Eq.subst A b c (Eq A a) h2 h1
 
 -- if f = g, then forall x, f(x) = g(x)
 def congr_fun (A : Type) (B : A -> Type) (f g : forall x : A, B x) (h : Eq (forall x : A, B x) f g) (a : A) : Eq (B a) (f a) (g a) :=
@@ -28,74 +28,67 @@ def nd_congr_fun (A B : Type) (f g : A -> B) (h : Eq (A -> B) f g) (x : A) : Eq 
   Eq.subst (A -> B) f g (fun fn => Eq B (f x) (fn x)) h (Eq.refl B (f x))
 
 -- a + (b + 1) = (a + b) + 1
-def Nat.add_succ (a b : Nat) : Eq Nat (Nat.add a (Nat.succ b)) (Nat.succ (Nat.add a b)) :=
-  Eq.refl Nat (Nat.add a (Nat.succ b))
+def Nat.add_succ (a b : Nat) : Eq Nat (a + Nat.succ b) (Nat.succ (a + b)) :=
+  Eq.refl Nat (a + Nat.succ b)
 
 -- (a + b) + 1 = a + (b + 1)
-def Nat.succ_add (a b : Nat) : Eq Nat (Nat.succ (Nat.add a b)) (Nat.add a (Nat.succ b)) :=
-  Eq.refl Nat (Nat.succ (Nat.add a b))
+def Nat.succ_add (a b : Nat) : Eq Nat (Nat.succ (a + b)) (a + Nat.succ b) :=
+  Eq.refl Nat (Nat.succ (a + b))
 
 -- (a + b) + 1 = (a + 1) + b
-def Nat.succ_add_comm (a b : Nat) : Eq Nat (Nat.succ (Nat.add a b)) (Nat.add (Nat.succ a) b) :=
+def Nat.succ_add_comm (a b : Nat) : Eq Nat (Nat.succ (a + b)) (Nat.succ a + b) :=
   match b
     | zero => Eq.refl Nat (Nat.succ a)
-    | succ m ih => congr_arg Nat Nat (Nat.succ (Nat.add a m)) (Nat.add (Nat.succ a) m) Nat.succ ih
+    | succ m ih => congr_arg Nat Nat (Nat.succ (a + m)) (Nat.succ a + m) Nat.succ ih
 
 -- 0 + n = n
-def Nat.zero_add (n : Nat) : Eq Nat (Nat.add 0 n) n :=
+def Nat.zero_add (n : Nat) : Eq Nat (0 + n) n :=
   match n
     | zero => Eq.refl Nat 0
-    -- if m = 0 + m, then succ(0) = succ(0 + m) (= n)
-    | succ m ih => congr_arg Nat Nat (Nat.add 0 m) m Nat.succ ih
+    -- if m = 0 + m, then succ(m) = succ(0 + m) (= n)
+    | succ m ih => congr_arg Nat Nat (0 + m) m Nat.succ ih
 
 -- n + 0 = n
-def Nat.add_zero (n : Nat) : Eq Nat (Nat.add n 0) n :=
+def Nat.add_zero (n : Nat) : Eq Nat (n + 0) n :=
   match n
     | zero => Eq.refl Nat 0
-    | succ m ih => congr_arg Nat Nat (Nat.add m 0) m Nat.succ ih
-
--- a + 0 = 0 + a
-def add_comm_base (a : Nat) : Eq Nat (Nat.add a 0) (Nat.add 0 a) :=
-  Eq.symm Nat (Nat.add 0 a) a (Nat.zero_add a)
+    | succ m ih => congr_arg Nat Nat (m + 0) m Nat.succ ih
 
 -- a + b = b + a => a + (b + 1) = (b + 1) + a
-def add_comm_rec (a b : Nat) (ih : Eq Nat (Nat.add a b) (Nat.add b a)) : Eq Nat (Nat.add a (Nat.succ b)) (Nat.add (Nat.succ b) a) :=
-  -- h1 : succ (a + b) = succ (b + a)
-  let h1 : Eq Nat (Nat.succ (Nat.add a b)) (Nat.succ (Nat.add b a)) := congr_arg Nat Nat (Nat.add a b) (Nat.add b a) Nat.succ ih in
-  -- h2 : a + (succ b) = succ (a + b)
-  let h2 : Eq Nat (Nat.succ (Nat.add a b)) (Nat.add a (Nat.succ b)) := Nat.add_succ a b in
-  -- h3 : succ (b + a) = (succ b) + a
-  let h3 : Eq Nat (Nat.succ (Nat.add b a)) (Nat.add (Nat.succ b) a) := Nat.succ_add_comm b a in
-  -- h4 : a + (succ b) = succ (b + a)
-  let h4 : Eq Nat (Nat.add a (Nat.succ b)) (Nat.succ (Nat.add b a)) := Eq.trans Nat (Nat.add a (Nat.succ b)) (Nat.succ (Nat.add a b)) (Nat.succ (Nat.add b a)) h2 h1 in
-  Eq.trans Nat (Nat.add a (Nat.succ b)) (Nat.succ (Nat.add b a)) (Nat.add (Nat.succ b) a) h4 h3
+def add_comm_rec (a b : Nat) (ih : Eq Nat (a + b) (b + a)) : Eq Nat (a + Nat.succ b) (Nat.succ b + a) :=
+  let h1 : Eq Nat (Nat.succ (a + b)) (Nat.succ (b + a)) := congr_arg Nat Nat (a + b) (b + a) Nat.succ ih in
+  let h2 : Eq Nat (Nat.succ (a + b)) (a + Nat.succ b) := Nat.add_succ a b in
+  let h3 : Eq Nat (Nat.succ (b + a)) (Nat.succ b + a) := Nat.succ_add_comm b a in
+  let h4 : Eq Nat (a + Nat.succ b) (Nat.succ (b + a)) := Eq.trans Nat (a + Nat.succ b) (Nat.succ (a + b)) (Nat.succ (b + a)) h2 h1 in
+  Eq.trans Nat (a + Nat.succ b) (Nat.succ (b + a)) (Nat.succ b + a) h4 h3
 
 -- addition is commutative: a + b = b + a
-def Nat.add_comm (a b : Nat) : Eq Nat (Nat.add a b) (Nat.add b a) :=
+def Nat.add_comm (a b : Nat) : Eq Nat (a + b) (b + a) :=
   match b
-    | zero => add_comm_base a
+    | zero => Eq.symm Nat (0 + a) a (Nat.zero_add a)
     | succ pred ih => add_comm_rec a pred ih
   
 -- addition is associative: (a + b) + c = a + (b + c)
-def Nat.add_assoc (a b c : Nat) : Eq Nat (Nat.add (Nat.add a b) c) (Nat.add a (Nat.add b c)) :=
+def Nat.add_assoc (a b c : Nat) : Eq Nat (a + b + c) (a + (b + c)) :=
   match c
-    | zero => Eq.refl Nat (Nat.add a b)
-    | succ pred ih => congr_arg Nat Nat (Nat.add (Nat.add a b) pred) (Nat.add a (Nat.add b pred)) Nat.succ ih
+    | zero => Eq.refl Nat (a + b)
+    | succ pred ih => congr_arg Nat Nat (a + b + pred) (a + (b + pred)) Nat.succ ih
 
 -- a + (b + c) = b + (a + c)
-def Nat.add_left_comm (a b c : Nat) : Eq Nat (Nat.add a (Nat.add b c)) (Nat.add b (Nat.add a c)) :=
-  -- h1 : a + (b + c) = (a + b) + c
-  let h1 : Eq Nat (Nat.add a (Nat.add b c)) (Nat.add (Nat.add a b) c) := Eq.symm Nat (Nat.add (Nat.add a b) c) (Nat.add a (Nat.add b c)) (Nat.add_assoc a b c) in
-  -- h2 : (a + b) + c = (b + c) + a
-  let h2 : Eq Nat (Nat.add (Nat.add a b) c) (Nat.add (Nat.add b c) a) := Nat.add_comm a (Nat.add b c) in
-  -- h3 : (b + c) + a = b + (c + a)
-  let h3 : Eq Nat (Nat.add (Nat.add b c) a) (Nat.add b (Nat.add c a)) := Nat.add_assoc b c a in
-  -- h4 : b + (c + a) = b + (a + c)
-  let h4 : Eq Nat (Nat.add b (Nat.add c a)) (Nat.add b (Nat.add a c)) := congr_arg Nat Nat (Nat.add c a) (Nat.add a c) (Nat.add b) (Nat.add_comm c a) in
-  -- h5 : a + (b + c) = (b + c) + a
-  let h5 : Eq Nat (Nat.add a (Nat.add b c)) (Nat.add (Nat.add b c) a) := Nat.add_comm a (Nat.add b c) in
-  -- h6 : (b + c) + a = b + (a + c)
-  let h6 : Eq Nat (Nat.add (Nat.add b c) a) (Nat.add b (Nat.add a c)) := Eq.trans Nat (Nat.add (Nat.add b c) a) (Nat.add b (Nat.add c a)) (Nat.add b (Nat.add a c)) h3 h4 in
-  Eq.trans Nat (Nat.add a (Nat.add b c)) (Nat.add (Nat.add b c) a) (Nat.add b (Nat.add a c)) h5 h6
-  
-  #check Nat.add_left_comm
+def Nat.add_left_comm (a b c : Nat) : Eq Nat (a + (b + c)) (b + (a + c)) :=
+  let h1 := Nat.add_comm a (b + c) in
+  -- h2 : (b + c) + a = b + (c + a)
+  let h2 := Nat.add_assoc b c a in
+  -- h3 : b + (c + a) = b + (a + c)
+  let h3 := congr_arg Nat Nat (c + a) (a + c) (Nat.add b) (Nat.add_comm c a) in
+  -- h4 : (b + c) + a = b + (a + c)
+  let h4 := Eq.trans Nat (b + c + a) (b + (c + a)) (b + (a + c)) h2 h3 in
+  Eq.trans Nat (a + (b + c)) (b + c + a) (b + (a + c)) h1 h4
+
+-- a + (b + c) = (a + c) + b
+def Nat.add_right_comm (a b c : Nat) : Eq Nat (a + (b + c)) (a + c + b) :=
+  -- h1 : a + (b + c) = a + (c + b)
+  let h1 := congr_arg Nat Nat (b + c) (c + b) (Nat.add a) (Nat.add_comm b c) in
+  -- h2 : a + (c + b) = (a + c) + b
+  let h2 := Eq.symm Nat (a + c + b) (a + (c + b)) (Nat.add_assoc a c b) in
+  Eq.trans Nat (a + (b + c)) (a + (c + b)) (a + c + b) h1 h2

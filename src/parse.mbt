@@ -1,6 +1,7 @@
 
 pub enum Token {
   Lparen; Rparen; ThickArrow; Arrow; Colon; Comma; Dot; Hash; Pipe; ColonEqual
+  Plus; Star
   Sort; Prop; Type; Fun; Forall; Let; In; Def; Axiom; Inductive; Match; Return
   Nat(UInt); Var(String); Path(Name)
 } derive(Show, Eq)
@@ -146,6 +147,8 @@ fn Lexer::next(self: Lexer) -> LexerResult {
     }
     '#' => { self.advance(); Yay(Hash) }
     '|' => { self.advance(); Yay(Pipe) }
+    '+' => { self.advance(); Yay(Plus) }
+    '*' => { self.advance(); Yay(Star) }
     _ => {
       if is_alpha(char) {
         let identifier = self.parse_identifier()
@@ -535,8 +538,32 @@ fn Parser::parse_app(self: Parser) -> STerm raise ParserError {
   lhs
 }
 
+fn Parser::parse_add(self: Parser) -> STerm raise ParserError {
+  let mut lhs = self.parse_mul()
+
+  while self.matches(Plus) {
+    self.advance()
+    let rhs = self.parse_mul()
+    lhs = App(App(Var(Path(Leaf("Nat"), "add")), lhs), rhs)
+  }
+
+  lhs
+}
+
+fn Parser::parse_mul(self: Parser) -> STerm raise ParserError {
+  let mut lhs = self.parse_app()
+
+  while self.matches(Star) {
+    self.advance()
+    let rhs = self.parse_app()
+    lhs = App(App(Var(Path(Leaf("Nat"), "mul")), lhs), rhs)
+  }
+
+  lhs
+}
+
 fn Parser::parse_arrow(self: Parser) -> STerm raise ParserError {
-  let lhs = self.parse_app()
+  let lhs = self.parse_add()
 
   if self.matches(Arrow) {
     self.advance()
