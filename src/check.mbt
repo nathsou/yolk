@@ -83,17 +83,6 @@ pub fn Context::init_default_inductives(self: Context) -> Unit {
     #|inductive Eq (A : Type) (a : A) : A -> Prop
     #|  | refl : Eq A a a
     #|
-    #|-- the <= relation is defined inductively as the smallest reflexive and transitive relation compatible with the successor
-    #|inductive Le (a : Nat) : Nat -> Prop
-    #|  | refl : Le a a
-    #|  | step : forall b : Nat, Le a b -> Le a (b + 1)
-    #|
-    #|def Lt (a b : Nat) : Prop := Le (a + 1) b
-    #|
-    #|def Ge (a b : Nat) : Prop := Le b a
-    #|
-    #|def Gt (a b : Nat) : Prop := Lt b a
-    #|
     #|def Nat.pred (n : Nat) : Nat :=
     #|  match n
     #|    | zero => Nat.zero
@@ -176,6 +165,16 @@ pub fn Context::init_default_inductives(self: Context) -> Unit {
     #|  match e
     #|    | left _ => false
     #|    | right _ => true
+    #|
+    #|inductive Le (a : Nat) : Nat -> Prop
+    #|  | refl : Le a a
+    #|  | step : forall (b : Nat), Le a b -> Le a (Nat.succ b)
+    #|
+    #| def Lt (a b : Nat) : Prop := Le (Nat.succ a) b
+    #| 
+    #| def Ge (a b : Nat) : Prop := Le b a
+    #| 
+    #| def Gt (a b : Nat) : Prop := Lt b a
 
     let lexer = Lexer::new(builtin)
     let tokens = try! lexer.tokenise()

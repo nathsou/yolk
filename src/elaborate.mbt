@@ -291,6 +291,25 @@ fn count_fun_binders(sterm: STerm) -> Int {
   }
 }
 
+// Append n anonymous binders at the innermost position of an STerm.
+// e.g. append_anon_binders(fun x => body, 1) = fun x => fun _ => body
+fn append_anon_binders(sterm: STerm, n: Int) -> STerm {
+  if n == 0 { return sterm }
+
+  match sterm {
+    Fun(x, ty, body) => Fun(x, ty, append_anon_binders(body, n))
+    other => {
+      let mut result = other
+
+      for _ in 0..<n {
+        result = Fun("_", None, result)
+      }
+
+      result
+    }
+  }
+}
+
 // Build a dependent motive by abstracting `terms` from `ret_ty`
 // `terms` contains index terms followed by the scrutinee, matching the Pi binders of motive_ty.
 // e.g. for Nat with scrutinee n and ret_ty = Eq Nat (Nat.add 0 n) n:
@@ -349,6 +368,8 @@ fn Elaborator::elaborate_match(
     _ => raise ElaborationError::Message("Expected scrutinee of 'match' to have an inductive type, got '\{scrutinee_ty}'")
   }
 
+  let num_ind_params = ind.params.length()
+
   if ind.constructors.length() != cases.length() {
     raise ElaborationError::Message("Number of match cases (\{cases.length()}) does not match number of constructors for type '\{scrutinee_ty_name}' (\{ind.constructors.length()})")
   }
@@ -359,9 +380,10 @@ fn Elaborator::elaborate_match(
     _ => raise ElaborationError::Message("No recursor found for inductive type '\{scrutinee_ty_name}'")
   }
 
-  // Walk the recursor type applying params to reach the motive binder.
+  // Walk the recursor type applying only the inductive parameters (not indices) to reach the motive binder.
   let mut partial_ty = rec_ty
-  for param in scrutinee_ty_params {
+  for i in 0..<num_ind_params {
+    let param = scrutinee_ty_params[i]
     match partial_ty {
       Pi(Some(_), _, body) => { partial_ty = instantiate(body, 0, param) }
       Pi(None, _, body) => { partial_ty = body }
@@ -382,7 +404,6 @@ fn Elaborator::elaborate_match(
     None => match expected_ty {
       None => raise ElaborationError::Message("Match expression requires a return type annotation (use 'return <type>') when the expected type is not known from context")
       Some(ret_ty) => {
-        let num_ind_params = ind.params.length()
         let terms_to_abstract: Array[Term] = []
 
         for i in num_ind_params..<scrutinee_ty_params.length() {
@@ -396,12 +417,10 @@ fn Elaborator::elaborate_match(
     Some(m) => {
       let n_pi = count_pi_binders(motive_ty)
       let n_fun = count_fun_binders(m)
+      // Append anonymous binders at the innermost position so the user can write
+      // `return fun x =>` and get `fun x => fun _ =>`, not `fun _ => fun x =>`.
       let wrapped: STerm = if n_fun < n_pi {
-        let mut result = m
-        for _ in 0..<(n_pi - n_fun) {
-          result = Fun("_", None, result)
-        }
-        result
+        append_anon_binders(m, n_pi - n_fun)
       } else {
         m
       }
@@ -452,12 +471,20 @@ fn Elaborator::elaborate_match(
     }
   })
 
+  // Apply only the inductive parameters to the recursor (not indices).
   let mut rec_app: Term = Const(rec_name)
-  for param in scrutinee_ty_params {
-    rec_app = App(rec_app, param)
+  for i in 0..<num_ind_params {
+    rec_app = App(rec_app, scrutinee_ty_params[i])
   }
   
   let rec_motive_partial_app = Term::App(rec_app, motive_elab)
   let rec_motive_full_app = ordered_handlers.fold(init=rec_motive_partial_app, (acc, minor) => App(acc, minor))
-  App(rec_motive_full_app, scrutinee_elab)
+  
+  // Apply indices, then the major premise (scrutinee).
+  let mut result = rec_motive_full_app
+  for i in num_ind_params..<scrutinee_ty_params.length() {
+    result = App(result, scrutinee_ty_params[i])
+  }
+
+  App(result, scrutinee_elab)
 }

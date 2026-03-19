@@ -246,3 +246,21 @@ def Nat.two_mul (a : Nat) : Eq Nat (2 * a) (a + a) :=
   let h2 : Eq Nat (a * 2) (a + a) := Nat.mul_two a in
   Eq.trans Nat (2 * a) (a * 2) (a + a) h1 h2
 
+-- ===== Inequalities =====
+
+def Nat.le_succ_of_le (a b : Nat) (h : Le a b) : Le a (Nat.succ b) :=
+  Le.step a b h
+
+def Nat.succ_le_succ (a b : Nat) (h : Le a b) : Le (Nat.succ a) (Nat.succ b) :=
+  match h
+    | refl => Le.refl (Nat.succ a)
+    | step b' h' ih => Le.step (Nat.succ a) (Nat.succ b') ih
+
+-- theorem Nat.le_trans {n m k : Nat} : LE.le n m → LE.le m k → LE.le n k
+--   | h,  Nat.le.refl    => h
+--   | h₁, Nat.le.step h₂ => Nat.le.step (Nat.le_trans h₁ h₂)
+
+def Nat.le_trans (a b c : Nat) : Le a b -> Le b c -> Le a c :=
+  fun h1 h2 => match h2
+    | refl => h1
+    | step b' _ ih => Le.step a b' ih
