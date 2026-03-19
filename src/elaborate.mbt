@@ -189,11 +189,18 @@ pub fn Elaborator::elaborate_term(self: Elaborator, term: STerm) -> Term raise {
       }
     }
     Pi(None, None, _) => raise ElaborationError::Message("Arrow type requires a domain type annotation")
-    Let(x, val, body) => {
+    Let(x, ann, val, body) => {
       let val_elab = self.elaborate_term(val)
       self.bound_vars.push(x)
       defer { let _ = self.bound_vars.unsafe_pop() }
-      let body_elab = self.elaborate_term(body)
+      
+      let body_elab = if ann is Some(ty) {
+        let ty_elab = self.elaborate_term(ty)
+        self.elaborate_term_check(body, ty_elab)
+      } else {
+        self.elaborate_term(body)
+      }
+        
       Let(x, val_elab, body_elab)
     }
     Ann(e, ty) => {

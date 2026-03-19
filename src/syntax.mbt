@@ -5,7 +5,7 @@ pub enum STerm {
   App(STerm, STerm)
   Fun(String, STerm?, STerm)
   Pi(String?, STerm?, STerm)
-  Let(String, STerm, STerm)
+  Let(String, STerm?, STerm, STerm)
   Ann(STerm, STerm)
   Match(scrutinee~: STerm, motive~: STerm?, cases~: Array[MatchCase])
 } derive(Eq)
@@ -177,9 +177,13 @@ pub impl Show for STerm with output(self: STerm, logger: &Logger) {
       b.parens(b is Pi(Some(_), _, _), logger)
     }
     Pi(None, None, _) => ()
-    Let(x, val, body) => {
+    Let(x, ty, val, body) => {
       logger.write_string("let ")
       logger.write_string(x)
+      if ty is Some(t) {
+        logger.write_string(" : ")
+        t.output(logger)
+      }
       logger.write_string(" := ")
       val.output(logger)
       logger.write_string(" in ")

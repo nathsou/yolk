@@ -348,13 +348,14 @@ fn Parser::parse_inductive(self: Parser) -> TopLevel[STerm] raise ParserError {
   let name = self.parse_name()
   let params: Array[(String, STerm)] = []
 
-  while self.matches(Lparen) {
-    let binder = self.parse_binder()
-    let ty = match binder.ty {
-      Some(ty) => ty
-      None => raise Message("Inductive type parameter '\{binder.name}' requires a type annotation")
+  if self.matches(Lparen) {
+    for binder in self.parse_binders(until=Colon) {
+      let ty = match binder.ty {
+        Some(ty) => ty
+        None => raise Message("Inductive type parameter '\{binder.name}' requires a type annotation")
+      }
+      params.push((binder.name, ty))
     }
-    params.push((binder.name, ty))
   }
 
   self.expect(Colon)
@@ -384,34 +385,67 @@ fn Parser::parse_command(self: Parser) -> TopLevel[STerm] raise ParserError {
   Command(name, args)
 }
 
-struct Binder {
-  name: String
-  ty: STerm?
+priv struct Binder { name: String; ty: STerm? }
+
+priv struct BinderGroup { names: Array[String]; ty: STerm }
+
+priv enum BinderOrGroup {
+  Binder(Binder)
+  Group(BinderGroup)
 }
 
-fn Parser::parse_binder(self: Parser) -> Binder raise ParserError {
+fn Parser::parse_binder(self: Parser) -> BinderOrGroup raise ParserError {
   let lparen_matched = self.matches(Lparen)
   if lparen_matched { self.advance() }
   let name = self.expect_var()
-  let ty = if self.matches(Colon) {
-    self.advance()
-    Some(self.parse_term())
+
+  if lparen_matched && !self.matches(Colon) {
+    let names = [name]
+    
+    while !self.matches(Colon) {
+      names.push(self.expect_var())
+    }
+
+    self.advance() // consume Colon
+    let ty = self.parse_term()
+    self.expect(Rparen)
+
+    Group({ names, ty })
   } else {
-    None
+    let ty = if self.matches(Colon) {
+      self.advance()
+      Some(self.parse_term())
+    } else {
+      None
+    }
+    
+    if lparen_matched { self.expect(Rparen) }
+    
+    Binder({ name, ty })
   }
-  if lparen_matched { self.expect(Rparen) }
-  
-  { name, ty }
 }
 
 fn Parser::parse_binders(self: Parser, until~: Token) -> Array[Binder] raise ParserError {
-  let binders: Array[Binder] = [self.parse_binder()]
+  let binders_or_groups: Array[BinderOrGroup] = [self.parse_binder()]
 
   while !self.matches(until) {
-    binders.push(self.parse_binder())
+    binders_or_groups.push(self.parse_binder())
   }
 
-  binders
+  let binders: Array[Binder] = []
+
+  for bg in binders_or_groups {
+    match bg {
+      Binder(b) => binders.push(b)
+      Group(g) => {
+        for name in g.names {
+          binders.push({ name, ty: Some(g.ty) })
+        }
+      }
+    }
+  }
+
+  binders  
 }
 
 fn Parser::parse_term(self: Parser) -> STerm raise ParserError {
@@ -447,11 +481,19 @@ fn Parser::parse_forall(self: Parser) -> STerm raise ParserError {
 fn Parser::parse_let(self: Parser) -> STerm raise ParserError {
   self.expect(Let)
   let v = self.expect_var()
+
+  let ann = if self.matches(Colon) {
+    self.advance()
+    Some(self.parse_term())
+  } else {
+    None
+  }
+
   self.expect(ColonEqual)
   let val = self.parse_term()
   self.expect(In)
   let body = self.parse_term()
-  Let(v, val, body)
+  Let(v, ann, val, body)
 }
 
 fn Parser::parse_match(self: Parser) -> STerm raise ParserError {
@@ -632,7 +674,8 @@ test "parser" {
   expect_term("forall A: Type, A", Pi(Some("A"), Some(Sort(1)), v("A")))
   expect_term("forall b: Bool, b", Pi(Some("b"), Some(v("Bool")), v("b")))
   expect_term("fun T: Type 2 => forall x: T, T", Fun("T", Some(Sort(3)), Pi(Some("x"), Some(v("T")), v("T"))))
-  expect_term("let id := fun x: A => x in id", Let("id", Fun("x", Some(v("A")), v("x")), v("id")))
+  expect_term("let id := fun x: A => x in id", Let("id", None, Fun("x", Some(v("A")), v("x")), v("id")))
+  expect_term("let id: A -> A := fun x: A => x in id", Let("id", Some(Pi(None, Some(v("A")), v("A"))), Fun("x", Some(v("A")), v("x")), v("id")))
   expect_term("fun (b : Bool) (n : Nat) => n", Fun("b", Some(v("Bool")), Fun("n", Some(v("Nat")), v("n"))))
   // unannotated binders
   expect_term("fun x => x", Fun("x", None, v("x")))

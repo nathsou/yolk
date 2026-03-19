@@ -161,7 +161,7 @@ fn Term::fmt(
         logger.write_object(count)
       } else {
         // not a numeral, show as current_arg + count
-        current_arg.parens(wrap=!(current_arg is (FreeVar(_) | BoundVar(_))) , bindings~, depth~, logger)
+        current_arg.parens(wrap=!(current_arg is (FreeVar(_) | BoundVar(_) | Const(_))) , bindings~, depth~, logger)
         logger.write_string(" + ")
         logger.write_object(count)
       }
