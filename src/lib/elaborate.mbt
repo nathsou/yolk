@@ -29,16 +29,20 @@ pub fn Elaborator::from(ctx: Context) -> Elaborator {
   }
 }
 
-pub fn Elaborator::elaborate(self: Elaborator, program: Program[STerm]) -> Unit raise {
+pub fn Elaborator::elaborate(self: Elaborator, program: Program[STerm], on_command_output~: (String) -> Unit = ignore) -> Unit raise {
   for top_level in program.0 {
     match top_level {
       Declaration(name, decl) => self.elaborate_decl(name, decl)
-      Command(name, args) => self.run_command(name, args)
+      Command(name, args) => {
+        if self.run_command(name, args) is Some(output) {
+          on_command_output(output)
+        }
+      }
     }
   }
 }
 
-pub fn Elaborator::run_command(self: Elaborator, name: String, args: Array[STerm]) -> Unit raise {
+pub fn Elaborator::run_command(self: Elaborator, name: String, args: Array[STerm]) -> String? raise {
   let args_elab = args.map(arg => self.elaborate_term(arg))
   if args_elab.length() != 1 {
     raise ElaborationError::Message("'\{name}' command expects exactly one argument")
@@ -49,18 +53,18 @@ pub fn Elaborator::run_command(self: Elaborator, name: String, args: Array[STerm
       let ty = self.ctx.infer(args_elab[0])
 
       match name {
-        "check" => { println(ty) }
-        "valid" => ()
+        "check" => Some(ty.to_string())
+        "valid" => None
         "eval" => {
           let nf = self.ctx.normalise(args_elab[0])
-          println(nf)
+          Some(nf.to_string())
         }
-        _ => ()
+        _ => None
       }
     }
     "invalid" => {
       try self.ctx.infer(args_elab[0]) catch {
-        _ => ()
+        _ => None
       } noraise {
         ty => raise ElaborationError::Message("Expected term '\{args[0]}' to be invalid, but it is well-typed with type '\{ty}'")
       }
@@ -275,6 +279,20 @@ pub fn Elaborator::elaborate_term_check(self: Elaborator, sterm: STerm, expected
     }
     Match(scrutinee~, motive~, cases~) => {
       self.elaborate_match(scrutinee, motive, cases, Some(expected_ty))
+    }
+    // propagate expected type to body
+    Let(x, ann, val, body) => {
+      let val_elab = if ann is Some(ty) {
+        let ty_elab = self.elaborate_term(ty)
+        self.elaborate_term_check(val, ty_elab)
+      } else {
+        self.elaborate_term(val)
+      }
+      
+      self.bound_vars.push(x)
+      defer { let _ = self.bound_vars.unsafe_pop() }
+      let body_elab = self.elaborate_term_check(body, expected_ty)
+      Let(x, val_elab, body_elab)
     }
     _ => self.elaborate_term(sterm)
   }

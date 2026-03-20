@@ -1,7 +1,7 @@
 import {
-    "moonbitlang/core/argparse",
+    "nathsou/yolk/lib",
     "moonbitlang/x/fs",
-    "moonbitlang/core/uint",
+    "moonbitlang/x/sys",
 }
 
 options(

@@ -1,5 +1,5 @@
 
-struct GlobalEnv {
+priv struct GlobalEnv {
   decls: Map[Name, Decl[Term]]
 }
 
@@ -575,7 +575,7 @@ fn Context::is_strictly_positive(self: Context, ty: Term, inductive_type_name: N
   }
 }
 
-struct OpenedBinder {
+priv struct OpenedBinder {
   name: String
   fvar: FreeVarId
   ty: Term

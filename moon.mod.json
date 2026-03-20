@@ -6,7 +6,9 @@
   "license": "Apache-2.0",
   "keywords": [],
   "deps": {
-    "moonbitlang/x": "0.4.38"
+    "moonbitlang/x": "0.4.38",
+    "peter-jerry-ye/wasi": "0.24.3"
   },
-  "description": "Yet anOther Logic Kernel"
+  "description": "Yet anOther Logic Kernel",
+  "source": "src"
 }

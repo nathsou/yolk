@@ -5,6 +5,44 @@ Yet anOther Logic Kernel
 Yolk is a minimal kernel implementation for the Calculus of Inductive Constructions (CIC)
 It can be used both as a proof assistant and as a purely functional programming language, thanks to the [Curry-Howard correspondence](https://en.wikipedia.org/wiki/Curry%E2%80%93Howard_correspondence).
 
+## Installation
+
+Download one of the builds on the [releases page](https://github.com/nathsou/yolk/releases)
+
+## Usage
+
+```bash
+yolk ./examples/proofs.yolk
+```
+
+## Development
+Install [Moonbit](https://www.moonbitlang.com/):
+
+```bash
+$ curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash -s '0.8.3+cd28f524e'
+moon run src/main/main.mbt
+```
+
+## Build
+
+### wasm + wasi preview 1
+
+```bash
+moon build --release --target=wasm src/cli-wasi/cli-wasi.mbt
+```
+
+### native
+
+```bash
+moon build --release --target=native src/main/main.mbt
+```
+
+### node.js
+
+```bash
+moon build --release --target=js src/main/main.mbt
+```
+
 ## References
 
 - [Type Theory and Formal Proof: An Introduction](https://www.cambridge.org/core/books/type-theory-and-formal-proof/0472640AAD34E045C7F140B46A57A67C) Rob Nederpelt, Herman Geuvers
