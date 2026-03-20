@@ -206,6 +206,10 @@ fn Context::check_decl(self: Context, name: Name, decl: Decl[Term]) -> Unit rais
       let _ = ensure_sort("definition", ty)
       self.check(body, ty)
     }
+    Theorem(ty, proof) => {
+      let _ = ensure_sort("theorem", ty)
+      self.check(proof, ty)
+    }
     Inductive({ ty, .. }) => {
       let arity_tys = ty.collect_pi_types()
       if !(arity_tys.last() is Some(Sort(_))) {
@@ -669,12 +673,9 @@ fn Context::normalise(self: Context, term: Term) -> Term raise TypeCheckError {
     Const(name) => {
       if self.env.decls.get(name) is Some(decl) {
         match decl {
-          Axiom(_) => term
           // delta reduction: unfold definitions
           Definition(_, body) => self.normalise(body)
-          Inductive(_) => term
-          Constructor(_) => term
-          Recursor(_) => term
+          Axiom(_) | Theorem(_) | Inductive(_) | Constructor(_) | Recursor(_) => term
         }
       } else {
         Const(name)
@@ -885,7 +886,7 @@ pub fn Context::whnf(self: Context, term: Term) -> Term {
         match decl {
           // delta reduction
           Definition(_, body) => self.whnf(body)
-          Axiom(_) | Inductive(_) | Constructor(_) | Recursor(_) => term
+          Axiom(_) | Inductive(_) | Constructor(_) | Recursor(_) | Theorem(_, _) => term
         }
       } else {
         Const(name)
@@ -1030,47 +1031,108 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
 }
 
 pub fn Context::check(self: Context, term: Term, ty: Term) -> Unit raise TypeCheckError {
-  match term {
-    _ => {
-      let inferred_ty_norm = self.normalise(self.infer(term))
-      let ty_norm = self.normalise(ty)
-      if !self.is_def_eq(inferred_ty_norm, ty_norm) {
-        raise TypeError(term, "Expected type '\{ty_norm}', got '\{inferred_ty_norm}'")
-      }
-    }
+  let inferred_ty = self.infer(term)
+  if !self.is_def_eq(inferred_ty, ty, cumulativity=true) {
+    raise TypeError(term, "Expected type '\{self.normalise(ty)}', got '\{self.normalise(inferred_ty)}'")
   }
 }
 
-// TODO: this is currently very naive and normalises both terms fully before comparing them, which is very inefficient.
-// see https://rocq-prover.org/doc/V8.19.0/refman/language/core/conversion.html for how to do this more efficiently by interleaving reduction and comparison
-// and only reducing as much as needed to determine definitional equality
-pub fn Context::is_def_eq(self: Context, term: Term, expected: Term) -> Bool raise TypeCheckError {
-  let t1_norm = self.normalise(term)
-  let t2_norm = self.normalise(expected)
+// Definitional equality check with interleaved WHNF reduction.
+// Only reduces as much as needed to determine equality, avoiding full normalisation
+// When cumulativity=true, allows universe cumulativity subtyping: Sort(u1) ≤ Sort(u2) when u1 ≤ u2
+// Cumulativity propagates covariantly through Pi codomains and lambda bodies,
+// but Pi domains always use strict equality (as required by contravariance)
+// see https://github.com/digama0/lean-type-theory section 2.2 (Definitional Equality) for details
+fn Context::is_def_eq(self: Context, t1: Term, t2: Term, cumulativity~: Bool = false) -> Bool raise TypeCheckError {
+  // Quick syntactic check before any reduction
+  if t1.is_alpha_eq(t2) {
+    return true
+  }
 
-  if t1_norm.is_alpha_eq(t2_norm) {
-    true
-  } else {
-    match (t1_norm, t2_norm) {
-      // universes are cumulative: Type u <= Type v if u <= v
-      (Sort(u1), Sort(u2)) => u1 <= u2
-      (Pi(x1, a1, b1), Pi(x2, a2, b2)) => {
-        if !self.is_def_eq(a1, a2) {
+  // Reduce both sides to Weak Head Normal Form
+  let w1 = self.whnf(t1)
+  let w2 = self.whnf(t2)
+
+  // Syntactic check after reduction
+  if w1.is_alpha_eq(w2) {
+    return true
+  }
+
+  match (w1, w2) {
+    // Universe equality: strict (u1 == u2) or cumulative (u1 ≤ u2)
+    (Sort(u1), Sort(u2)) => if cumulativity { u1 <= u2 } else { u1 == u2 }
+
+    // Lambda congruence: Γ ⊢ α ≡ α', Γ,x:α ⊢ e ≡ e' → Γ ⊢ λx:α.e ≡ λx:α'.e'
+    // Parameter types use strict equality, bodies propagate cumulativity
+    (Lam(x, a1, b1), Lam(_, a2, b2)) => {
+      if !self.is_def_eq(a1, a2) {
+        return false
+      }
+
+      let fresh = self.declare_fresh(a1)
+      defer self.free_vars.remove(fresh)
+      self.is_def_eq(open(b1, 0, x, fresh), open(b2, 0, x, fresh), cumulativity~)
+    }
+
+    // η-expansion (left): Γ ⊢ e : ∀y:α.β → Γ ⊢ λx:α. e x ≡ e
+    (Lam(x, a, b), _) => {
+      let fresh = self.declare_fresh(a)
+      defer self.free_vars.remove(fresh)
+      self.is_def_eq(open(b, 0, x, fresh), App(w2, FreeVar(x, fresh)), cumulativity~)
+    }
+
+    // η-expansion (right)
+    (_, Lam(x, a, b)) => {
+      let fresh = self.declare_fresh(a)
+      defer self.free_vars.remove(fresh)
+      self.is_def_eq(App(w1, FreeVar(x, fresh)), open(b, 0, x, fresh), cumulativity~)
+    }
+
+    // Pi congruence: domains must be strictly equal, codomains propagate cumulativity
+    // Γ ⊢ α ≡ α', Γ,x:α ⊢ β ≤ β' → Γ ⊢ ∀x:α.β ≤ ∀x:α'.β'
+    (Pi(x1, a1, b1), Pi(x2, a2, b2)) => {
+      if !self.is_def_eq(a1, a2) {
+        return false
+      }
+
+      let fresh = self.declare_fresh(a1)
+      defer self.free_vars.remove(fresh)
+      let name1 = match x1 { Some(x) => x; None => "_" }
+      let name2 = match x2 { Some(x) => x; None => "_" }
+      self.is_def_eq(open(b1, 0, name1, fresh), open(b2, 0, name2, fresh), cumulativity~)
+    }
+
+    // For remaining head forms: try structural comparison, then proof irrelevance
+    _ => {
+      let structural_eq = match (w1, w2) {
+        // Application congruence
+        (App(f1, a1), App(f2, a2)) => self.is_def_eq(f1, f2) && self.is_def_eq(a1, a2)
+        (Const(n1), Const(n2)) => n1 == n2
+        (FreeVar(_, id1), FreeVar(_, id2)) => id1 == id2
+        (BoundVar(i), BoundVar(j)) => i == j
+        _ => false
+      }
+
+      if structural_eq {
+        return true
+      }
+
+      // Proof irrelevance: Γ ⊢ p : ℙ, Γ ⊢ h : p, Γ ⊢ h' : p → Γ ⊢ h ≡ h'
+      {
+        let ty1 = self.infer(w1)
+        let s1 = self.whnf(self.infer(ty1))
+        if !(s1 is Sort(0)) {
+          return false
+        }
+        
+        let ty2 = self.infer(w2)
+        let s2 = self.whnf(self.infer(ty2))
+        if !(s2 is Sort(0)) {
           return false
         }
 
-        // Open both bodies with the same fresh FreeVar so they can be compared
-        let fresh_x = self.declare_fresh(a1)
-        defer self.free_vars.remove(fresh_x)
-
-        let name1 = match x1 { Some(x) => x; None => "_" }
-        let name2 = match x2 { Some(x) => x; None => "_" }
-        let opened_b1 = open(b1, 0, name1, fresh_x)
-        let opened_b2 = open(b2, 0, name2, fresh_x)
-
-        self.is_def_eq(opened_b1, opened_b2)
+        self.is_def_eq(ty1, ty2)
       }
-      _ => false
     }
   }
 }

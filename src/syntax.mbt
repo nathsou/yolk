@@ -13,6 +13,7 @@ pub enum STerm {
 pub enum Decl[T] {
   Axiom(T) // type
   Definition(T, T) // type, body
+  Theorem(T, T) // type, proof term
   Inductive(InductiveDecl[T])
   Constructor(
     ind~: InductiveDecl[T],
@@ -44,6 +45,7 @@ pub fn[T] Decl::ty(self: Decl[T]) -> T {
   match self {
     Axiom(ty) => ty
     Definition(ty, _) => ty
+    Theorem(ty, _) => ty
     Inductive({ ty, .. }) => ty
     Constructor(ty~, ..) => ty
     Recursor(ty~, ..) => ty
@@ -237,6 +239,14 @@ pub impl[T: Show] Show for TopLevel[T] with output(self: TopLevel[T], logger: &L
       logger.write_object(ty)
       logger.write_string(" := ")
       logger.write_object(val)
+    }
+    Declaration(name, Theorem(ty, proof)) => {
+      logger.write_string("theorem ")
+      logger.write_object(name)
+      logger.write_string(" : ")
+      logger.write_object(ty)
+      logger.write_string(" := ")
+      logger.write_object(proof)
     }
     Declaration(name, Inductive({ constructors, ty, .. })) => {
       logger.write_string("inductive ")

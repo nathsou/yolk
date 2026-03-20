@@ -6,78 +6,78 @@ def id (A : Type) (x : A) : A := x
 def Neq (A : Type) (a b : A) : Prop := Not (Eq A a b)
 
 -- Non-dependent recursor for the equality type, offering a simplified motive
-def Eq.ndrec (A : Type) (a b : A) (motive : A -> Prop) (m : motive a) (h : Eq A a b) : motive b :=
+theorem Eq.ndrec (A : Type) (a b : A) (motive : A -> Prop) (m : motive a) (h : Eq A a b) : motive b :=
   Eq.rec A a (fun (x : A) (_ : Eq A a x) => motive x) m b h
 
 -- equality is symmetrical: if a = b, then b = a
-def Eq.symm (A : Type) (a b : A) (h : Eq A a b) : Eq A b a :=
+theorem Eq.symm (A : Type) (a b : A) (h : Eq A a b) : Eq A b a :=
   Eq.ndrec A a b (fun x => Eq A x a) (Eq.refl A a) h
 
 -- if P(a) holds, and a = b, then P(b) holds
-def Eq.subst (A : Type) (a b : A) (P : A -> Prop) (h1 : Eq A a b) (h2 : P a) : P b :=
+theorem Eq.subst (A : Type) (a b : A) (P : A -> Prop) (h1 : Eq A a b) (h2 : P a) : P b :=
   Eq.ndrec A a b P h2 h1
 
 -- if a = b, then f(a) = f(b)
-def congr_arg (A B : Type) (a1 a2 : A) (f : A -> B) (h : Eq A a1 a2) : Eq B (f a1) (f a2) :=
+theorem congr_arg (A B : Type) (a1 a2 : A) (f : A -> B) (h : Eq A a1 a2) : Eq B (f a1) (f a2) :=
   Eq.subst A a1 a2 (fun x => Eq B (f a1) (f x)) h (Eq.refl B (f a1))
 
 -- if a1 = a2, b1 = b2, f(a1) = f(b1), then f(a2) = f(b2)
-def congr_arg2 (A B : Type) (a1 a2 b1 b2 : A) (f : A -> B) (h1 : Eq A a1 a2) (h2 : Eq A b1 b2) (h3 : Eq B (f a1) (f b1)) : Eq B (f a2) (f b2) :=
+theorem congr_arg2 (A B : Type) (a1 a2 b1 b2 : A) (f : A -> B) (h1 : Eq A a1 a2) (h2 : Eq A b1 b2) (h3 : Eq B (f a1) (f b1)) : Eq B (f a2) (f b2) :=
   let h4 : Eq B (f a1) (f a2) := congr_arg A B a1 a2 f h1 in
   let h5 : Eq B (f b1) (f b2) := congr_arg A B b1 b2 f h2 in
   let h6 : Eq B (f a2) (f b1) := Eq.subst B (f a1) (f a2) (fun x => Eq B x (f b1)) h4 h3 in
   Eq.subst B (f b1) (f b2) (Eq B (f a2)) h5 h6
 
 -- equality is transitive: if a = b and b = c, then a = c
-def Eq.trans (A : Type) (a b c : A) (h1 : Eq A a b) (h2 : Eq A b c) : Eq A a c :=
+theorem Eq.trans (A : Type) (a b c : A) (h1 : Eq A a b) (h2 : Eq A b c) : Eq A a c :=
   Eq.subst A b c (Eq A a) h2 h1
 
 -- if f = g, then forall x, f(x) = g(x)
-def congr_fun (A : Type) (B : A -> Type) (f g : forall x : A, B x) (h : Eq (forall x : A, B x) f g) (a : A) : Eq (B a) (f a) (g a) :=
+theorem congr_fun (A : Type) (B : A -> Type) (f g : forall x : A, B x) (h : Eq (forall x : A, B x) f g) (a : A) : Eq (B a) (f a) (g a) :=
   Eq.subst (forall x : A, B x) f g (fun fn => Eq (B a) (f a) (fn a)) h (Eq.refl (B a) (f a))
 
 -- same as `congr_fun` for non-dependent functions
-def nd_congr_fun (A B : Type) (f g : A -> B) (h : Eq (A -> B) f g) (x : A) : Eq B (f x) (g x) :=
+theorem nd_congr_fun (A B : Type) (f g : A -> B) (h : Eq (A -> B) f g) (x : A) : Eq B (f x) (g x) :=
   Eq.subst (A -> B) f g (fun fn => Eq B (f x) (fn x)) h (Eq.refl B (f x))
 
 -- ===== Nat.add =====
 
 -- a + (b + 1) = (a + b) + 1
-def Nat.add_succ (a b : Nat) : Eq Nat (a + Nat.succ b) (Nat.succ (a + b)) :=
+theorem Nat.add_succ (a b : Nat) : Eq Nat (a + Nat.succ b) (Nat.succ (a + b)) :=
   Eq.refl Nat (a + Nat.succ b)
 
 -- (a + b) + 1 = a + (b + 1)
-def Nat.succ_add (a b : Nat) : Eq Nat (Nat.succ (a + b)) (a + Nat.succ b) :=
+theorem Nat.succ_add (a b : Nat) : Eq Nat (Nat.succ (a + b)) (a + Nat.succ b) :=
   Eq.refl Nat (Nat.succ (a + b))
 
 -- (a + b) + 1 = (a + 1) + b
-def Nat.succ_add_comm (a b : Nat) : Eq Nat (Nat.succ (a + b)) (Nat.succ a + b) :=
+theorem Nat.succ_add_comm (a b : Nat) : Eq Nat (Nat.succ (a + b)) (Nat.succ a + b) :=
   match b
     | zero => Eq.refl Nat (Nat.succ a)
     | succ m ih => congr_arg Nat Nat (Nat.succ (a + m)) (Nat.succ a + m) Nat.succ ih
 
 -- 0 + n = n
-def Nat.zero_add (n : Nat) : Eq Nat (0 + n) n :=
+theorem Nat.zero_add (n : Nat) : Eq Nat (0 + n) n :=
   match n
     | zero => Eq.refl Nat 0
     -- if m = 0 + m, then succ(m) = succ(0 + m) (= n)
     | succ m ih => congr_arg Nat Nat (0 + m) m Nat.succ ih
 
 -- n + 0 = n
-def Nat.add_zero (n : Nat) : Eq Nat (n + 0) n :=
+theorem Nat.add_zero (n : Nat) : Eq Nat (n + 0) n :=
   match n
     | zero => Eq.refl Nat 0
     | succ m ih => congr_arg Nat Nat (m + 0) m Nat.succ ih
 
-def Nat.pred_succ (n : Nat) : Eq Nat (Nat.pred (Nat.succ n)) n :=
+theorem Nat.pred_succ (n : Nat) : Eq Nat (Nat.pred (Nat.succ n)) n :=
   Eq.refl Nat n
 
 -- succ(a) = succ(b) => a = b
-def Nat.succ_inj_eq (a b : Nat) : Eq Nat (Nat.succ a) (Nat.succ b) -> Eq Nat a b :=
+theorem Nat.succ_inj_eq (a b : Nat) : Eq Nat (Nat.succ a) (Nat.succ b) -> Eq Nat a b :=
   fun h => congr_arg Nat Nat (Nat.succ a) (Nat.succ b) Nat.pred h
 
 -- forall n, (Nat.succ n) != 0
-def Nat.succ_neq_zero (n : Nat) : Neq Nat (Nat.succ n) 0 :=
+theorem Nat.succ_neq_zero (n : Nat) : Neq Nat (Nat.succ n) 0 :=
   let discriminator : Nat -> Prop :=
     fun x => match x
       | zero => False
@@ -87,7 +87,7 @@ def Nat.succ_neq_zero (n : Nat) : Neq Nat (Nat.succ n) 0 :=
     Eq.subst Nat (Nat.succ n) 0 discriminator h True.intro
 
 -- a + b = b + a => a + (b + 1) = (b + 1) + a
-def add_comm_rec (a b : Nat) (ih : Eq Nat (a + b) (b + a)) : Eq Nat (a + Nat.succ b) (Nat.succ b + a) :=
+theorem add_comm_rec (a b : Nat) (ih : Eq Nat (a + b) (b + a)) : Eq Nat (a + Nat.succ b) (Nat.succ b + a) :=
   let h1 : Eq Nat (Nat.succ (a + b)) (Nat.succ (b + a)) := congr_arg Nat Nat (a + b) (b + a) Nat.succ ih in
   let h2 : Eq Nat (Nat.succ (a + b)) (a + Nat.succ b) := Nat.add_succ a b in
   let h3 : Eq Nat (Nat.succ (b + a)) (Nat.succ b + a) := Nat.succ_add_comm b a in
@@ -95,19 +95,19 @@ def add_comm_rec (a b : Nat) (ih : Eq Nat (a + b) (b + a)) : Eq Nat (a + Nat.suc
   Eq.trans Nat (a + Nat.succ b) (Nat.succ (b + a)) (Nat.succ b + a) h4 h3
 
 -- addition is commutative: a + b = b + a
-def Nat.add_comm (a b : Nat) : Eq Nat (a + b) (b + a) :=
+theorem Nat.add_comm (a b : Nat) : Eq Nat (a + b) (b + a) :=
   match b
     | zero => Eq.symm Nat (0 + a) a (Nat.zero_add a)
     | succ pred ih => add_comm_rec a pred ih
   
 -- addition is associative: (a + b) + c = a + (b + c)
-def Nat.add_assoc (a b c : Nat) : Eq Nat (a + b + c) (a + (b + c)) :=
+theorem Nat.add_assoc (a b c : Nat) : Eq Nat (a + b + c) (a + (b + c)) :=
   match c
     | zero => Eq.refl Nat (a + b)
     | succ pred ih => congr_arg Nat Nat (a + b + pred) (a + (b + pred)) Nat.succ ih
 
 -- a + (b + c) = b + (a + c)
-def Nat.add_left_comm (a b c : Nat) : Eq Nat (a + (b + c)) (b + (a + c)) :=
+theorem Nat.add_left_comm (a b c : Nat) : Eq Nat (a + (b + c)) (b + (a + c)) :=
   let h1 := Nat.add_comm a (b + c) in
   -- h2 : (b + c) + a = b + (c + a)
   let h2 := Nat.add_assoc b c a in
@@ -118,14 +118,14 @@ def Nat.add_left_comm (a b c : Nat) : Eq Nat (a + (b + c)) (b + (a + c)) :=
   Eq.trans Nat (a + (b + c)) (b + c + a) (b + (a + c)) h1 h4
 
 -- a + (b + c) = (a + c) + b
-def Nat.add_right_comm (a b c : Nat) : Eq Nat (a + (b + c)) (a + c + b) :=
+theorem Nat.add_right_comm (a b c : Nat) : Eq Nat (a + (b + c)) (a + c + b) :=
   -- h1 : a + (b + c) = a + (c + b)
   let h1 := congr_arg Nat Nat (b + c) (c + b) (Nat.add a) (Nat.add_comm b c) in
   -- h2 : a + (c + b) = (a + c) + b
   let h2 := Eq.symm Nat (a + c + b) (a + (c + b)) (Nat.add_assoc a c b) in
   Eq.trans Nat (a + (b + c)) (a + (c + b)) (a + c + b) h1 h2
 
-def Nat.add_left_cancel (a b c : Nat) : Eq Nat (a + b) (a + c) -> Eq Nat b c :=
+theorem Nat.add_left_cancel (a b c : Nat) : Eq Nat (a + b) (a + c) -> Eq Nat b c :=
   match a
     | zero => fun h => congr_arg2 Nat Nat (0 + b) b (0 + c) c (id Nat) (Nat.zero_add b) (Nat.zero_add c) h
     | succ pred ih => fun (h : Eq Nat (Nat.succ pred + b) (Nat.succ pred + c)) =>
@@ -136,33 +136,35 @@ def Nat.add_left_cancel (a b c : Nat) : Eq Nat (a + b) (a + c) -> Eq Nat b c :=
       let h3 : Eq Nat (pred + b) (pred + c) := congr_arg Nat Nat (Nat.succ (pred + b)) (Nat.succ (pred + c)) Nat.pred h2 in
       ih h3
 
-def Nat.add_right_cancel (a b c : Nat) (h : Eq Nat (a + b) (c + b)) : Eq Nat a c :=
+theorem Nat.add_right_cancel (a b c : Nat) (h : Eq Nat (a + b) (c + b)) : Eq Nat a c :=
   let h1 : Eq Nat (b + a) (a + b) := Eq.symm Nat (a + b) (b + a) (Nat.add_comm a b) in
   let h2 : Eq Nat (c + b) (b + c) := Nat.add_comm c b in
   let h3 : Eq Nat (b + a) (c + b) := Eq.trans Nat (b + a) (a + b) (c + b) h1 h in
   let h4 : Eq Nat (b + a) (b + c) := Eq.trans Nat (b + a) (c + b) (b + c) h3 h2 in
   Nat.add_left_cancel b a c h4
 
-def Nat.eq_zero_of_add_eq_zero (a b : Nat) : Eq Nat (a + b) 0 -> And (Eq Nat a 0) (Eq Nat b 0) :=
+theorem Nat.eq_zero_of_add_eq_zero (a b : Nat) : Eq Nat (a + b) 0 -> And (Eq Nat a 0) (Eq Nat b 0) :=
   match b
     | zero => fun (h : Eq Nat a 0) => And.intro (Eq Nat a 0) (Eq Nat 0 0) h (Eq.refl Nat 0)
     | succ b' ih => fun (h : Eq Nat (Nat.succ (a + b')) 0) => match Nat.succ_neq_zero (a + b') h
 
-def Nat.mul_zero (n : Nat) : Eq Nat (n * 0) 0 :=
+-- ===== Nat.mul =====
+
+theorem Nat.mul_zero (n : Nat) : Eq Nat (n * 0) 0 :=
   Eq.refl Nat 0
 
-def Nat.mul_succ (a b : Nat) : Eq Nat (a * Nat.succ b) (a * b + a) :=
+theorem Nat.mul_succ (a b : Nat) : Eq Nat (a * Nat.succ b) (a * b + a) :=
   Eq.refl Nat (a * b + a)
 
-def Nat.mul_add_one (a b : Nat) : Eq Nat (a * (b + 1)) (a * b + a) :=
+theorem Nat.mul_add_one (a b : Nat) : Eq Nat (a * (b + 1)) (a * b + a) :=
   Eq.refl Nat (a * b + a)
 
-def Nat.zero_mul (a : Nat) : Eq Nat (0 * a) 0 :=
+theorem Nat.zero_mul (a : Nat) : Eq Nat (0 * a) 0 :=
   match a
     | zero => Eq.refl Nat 0
     | succ _ ih => ih
 
-def Nat.succ_mul (a b : Nat) : Eq Nat (Nat.succ a * b) (a * b + b) :=
+theorem Nat.succ_mul (a b : Nat) : Eq Nat (Nat.succ a * b) (a * b + b) :=
   match b
     | zero => Eq.refl Nat 0
     | succ b_prev ih =>
@@ -174,10 +176,10 @@ def Nat.succ_mul (a b : Nat) : Eq Nat (Nat.succ a * b) (a * b + b) :=
         congr_arg Nat Nat (a * b_prev + b_prev + a) (a * b_prev + a + b_prev) Nat.succ h2 in
       Eq.trans Nat (Nat.succ a * b_prev + Nat.succ a) (a * b_prev + b_prev + Nat.succ a) (a * b_prev + a + Nat.succ b_prev) h1 h3
 
-def Nat.add_one_mul (a b : Nat) : Eq Nat ((a + 1) * b) ((a * b) + b) :=
+theorem Nat.add_one_mul (a b : Nat) : Eq Nat ((a + 1) * b) ((a * b) + b) :=
   Nat.succ_mul a b
 
-def Nat.mul_comm (a b : Nat) : Eq Nat (a * b) (b * a) :=
+theorem Nat.mul_comm (a b : Nat) : Eq Nat (a * b) (b * a) :=
   match b
     | zero =>
       let h1 : Eq Nat (a * 0) 0 := Nat.mul_zero a in
@@ -191,13 +193,13 @@ def Nat.mul_comm (a b : Nat) : Eq Nat (a * b) (b * a) :=
       let h5 : Eq Nat (a * b_prev + a) (Nat.succ b_prev * a) := Eq.trans Nat (a * b_prev + a) (b_prev * a + a) (Nat.succ b_prev * a) h2 h4 in
       Eq.trans Nat (a * Nat.succ b_prev) (a * b_prev + a) (Nat.succ b_prev * a) h1 h5
 
-def Nat.mul_one (a : Nat) : Eq Nat (a * 1) a :=
+theorem Nat.mul_one (a : Nat) : Eq Nat (a * 1) a :=
   Nat.zero_add a
 
-def Nat.one_mul (a : Nat) : Eq Nat (1 * a) a :=
+theorem Nat.one_mul (a : Nat) : Eq Nat (1 * a) a :=
   Eq.trans Nat (1 * a) (a * 1) a (Nat.mul_comm 1 a) (Nat.mul_one a)
 
-def Nat.left_distrib (a b c : Nat) : Eq Nat (a * (b + c)) (a * b + a * c) :=
+theorem Nat.left_distrib (a b c : Nat) : Eq Nat (a * (b + c)) (a * b + a * c) :=
   match c
     | zero =>
       Eq.refl Nat (a * b)
@@ -206,7 +208,7 @@ def Nat.left_distrib (a b c : Nat) : Eq Nat (a * (b + c)) (a * b + a * c) :=
       let h2 : Eq Nat (a * b + a * c_prev + a) (a * b + (a * c_prev + a)) := Nat.add_assoc (a * b) (a * c_prev) a in
       Eq.trans Nat (a * (b + c_prev) + a) (a * b + a * c_prev + a) (a * b + (a * c_prev + a)) h1 h2
 
-def Nat.right_distrib (a b c : Nat) : Eq Nat ((a + b) * c) (a * c + b * c) :=
+theorem Nat.right_distrib (a b c : Nat) : Eq Nat ((a + b) * c) (a * c + b * c) :=
   let h1 : Eq Nat ((a + b) * c) (c * (a + b)) := Nat.mul_comm (a + b) c in
   let h2 : Eq Nat (c * (a + b)) (c * a + c * b) := Nat.left_distrib c a b in
   let h3 : Eq Nat (c * a + c * b) (a * c + c * b) := congr_arg Nat Nat (c * a) (a * c) (fun (x : Nat) => x + c * b) (Nat.mul_comm c a) in
@@ -215,13 +217,13 @@ def Nat.right_distrib (a b c : Nat) : Eq Nat ((a + b) * c) (a * c + b * c) :=
   let hb : Eq Nat (c * (a + b)) (a * c + b * c) := Eq.trans Nat (c * (a + b)) (c * a + c * b) (a * c + b * c) h2 hc in
   Eq.trans Nat ((a + b) * c) (c * (a + b)) (a * c + b * c) h1 hb
 
-def Nat.mul_add (a b c : Nat) : Eq Nat (a * (b + c)) (a * b + a * c) :=
+theorem Nat.mul_add (a b c : Nat) : Eq Nat (a * (b + c)) (a * b + a * c) :=
   Nat.left_distrib a b c
 
-def Nat.add_mul (a b c : Nat) : Eq Nat ((a + b) * c) (a * c + b * c) :=
+theorem Nat.add_mul (a b c : Nat) : Eq Nat ((a + b) * c) (a * c + b * c) :=
   Nat.right_distrib a b c
 
-def Nat.mul_assoc (a b c : Nat) : Eq Nat ((a * b) * c) (a * (b * c)) :=
+theorem Nat.mul_assoc (a b c : Nat) : Eq Nat ((a * b) * c) (a * (b * c)) :=
   match c
     | zero =>
       Eq.refl Nat 0
@@ -230,37 +232,34 @@ def Nat.mul_assoc (a b c : Nat) : Eq Nat ((a * b) * c) (a * (b * c)) :=
       let h2 : Eq Nat (a * (b * c_prev) + a * b) (a * (b * c_prev + b)) := Eq.symm Nat (a * (b * c_prev + b)) (a * (b * c_prev) + a * b) (Nat.left_distrib a (b * c_prev) b) in
       Eq.trans Nat ((a * b) * c_prev + a * b) (a * (b * c_prev) + a * b) (a * (b * c_prev + b)) h1 h2
 
-def Nat.mul_left_comm (a b c : Nat) : Eq Nat (a * (b * c)) (b * (a * c)) :=
+theorem Nat.mul_left_comm (a b c : Nat) : Eq Nat (a * (b * c)) (b * (a * c)) :=
   let h1 : Eq Nat (a * (b * c)) ((a * b) * c) := Eq.symm Nat ((a * b) * c) (a * (b * c)) (Nat.mul_assoc a b c) in
   let h2 : Eq Nat ((a * b) * c) ((b * a) * c) := congr_arg Nat Nat (a * b) (b * a) (fun (x : Nat) => x * c) (Nat.mul_comm a b) in
   let h3 : Eq Nat ((b * a) * c) (b * (a * c)) := Nat.mul_assoc b a c in
   let hc : Eq Nat (a * (b * c)) ((b * a) * c) := Eq.trans Nat (a * (b * c)) ((a * b) * c) ((b * a) * c) h1 h2 in
   Eq.trans Nat (a * (b * c)) ((b * a) * c) (b * (a * c)) hc h3
 
-def Nat.mul_two (a : Nat) : Eq Nat (a * 2) (a + a) :=
+theorem Nat.mul_two (a : Nat) : Eq Nat (a * 2) (a + a) :=
+  -- a * 2 normalises to (0 + a) + a
   let hz : Eq Nat (0 + a) a := Nat.zero_add a in
-  congr_arg Nat Nat (0 + a) a (fun (x : Nat) => x + a) hz
+  congr_arg Nat Nat (0 + a) a (fun x => x + a) hz
 
-def Nat.two_mul (a : Nat) : Eq Nat (2 * a) (a + a) :=
+theorem Nat.two_mul (a : Nat) : Eq Nat (2 * a) (a + a) :=
   let h1 : Eq Nat (2 * a) (a * 2) := Nat.mul_comm 2 a in
   let h2 : Eq Nat (a * 2) (a + a) := Nat.mul_two a in
   Eq.trans Nat (2 * a) (a * 2) (a + a) h1 h2
 
 -- ===== Inequalities =====
 
-def Nat.le_succ_of_le (a b : Nat) (h : Le a b) : Le a (Nat.succ b) :=
+theorem Nat.le_succ_of_le (a b : Nat) (h : Le a b) : Le a (Nat.succ b) :=
   Le.step a b h
 
-def Nat.succ_le_succ (a b : Nat) (h : Le a b) : Le (Nat.succ a) (Nat.succ b) :=
+theorem Nat.succ_le_succ (a b : Nat) (h : Le a b) : Le (Nat.succ a) (Nat.succ b) :=
   match h
     | refl => Le.refl (Nat.succ a)
     | step b' h' ih => Le.step (Nat.succ a) (Nat.succ b') ih
 
--- theorem Nat.le_trans {n m k : Nat} : LE.le n m → LE.le m k → LE.le n k
---   | h,  Nat.le.refl    => h
---   | h₁, Nat.le.step h₂ => Nat.le.step (Nat.le_trans h₁ h₂)
-
-def Nat.le_trans (a b c : Nat) : Le a b -> Le b c -> Le a c :=
+theorem Nat.le_trans (a b c : Nat) : Le a b -> Le b c -> Le a c :=
   fun h1 h2 => match h2
     | refl => h1
     | step b' _ ih => Le.step a b' ih

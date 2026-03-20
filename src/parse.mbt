@@ -2,7 +2,7 @@
 pub enum Token {
   Lparen; Rparen; ThickArrow; Arrow; Colon; Comma; Dot; Hash; Pipe; ColonEqual
   Plus; Star
-  Sort; Prop; Type; Fun; Forall; Let; In; Def; Axiom; Inductive; Match; Return
+  Sort; Prop; Type; Fun; Forall; Let; In; Def; Axiom; Theorem; Inductive; Match; Return
   Nat(UInt); Var(String); Path(Name)
 } derive(Show, Eq)
 
@@ -155,6 +155,7 @@ fn Lexer::next(self: Lexer) -> LexerResult {
 
         match identifier {
           "axiom" => Yay(Axiom)
+          "theorem" => Yay(Theorem)
           "fun" => Yay(Fun)
           "forall" => Yay(Forall)
           "let" => Yay(Let)
@@ -288,7 +289,7 @@ pub fn Parser::parse(self: Parser) -> Program[STerm] raise ParserError {
 fn Parser::parse_top_level(self: Parser) -> TopLevel[STerm] raise ParserError {
   match self.peek() {
     Axiom => self.parser_axiom()
-    Def => self.parse_definition()
+    Def | Theorem => self.parse_definition_or_theorem()
     Hash => self.parse_command()
     Inductive => self.parse_inductive()
     _ => raise UnexpectedToken(self.peek())
@@ -318,8 +319,14 @@ fn Parser::parser_axiom(self: Parser) -> TopLevel[STerm] raise ParserError {
   Declaration(name, Axiom(ty))
 }
 
-fn Parser::parse_definition(self: Parser) -> TopLevel[STerm] raise ParserError {
-  self.expect(Def)
+fn Parser::parse_definition_or_theorem(self: Parser) -> TopLevel[STerm] raise ParserError {
+  let is_theorem = self.matches(Theorem)
+  if is_theorem {
+    self.advance()
+  } else {
+    self.expect(Def)
+  }
+
   let name = self.parse_name()
   
   match self.peek() {
@@ -328,7 +335,14 @@ fn Parser::parse_definition(self: Parser) -> TopLevel[STerm] raise ParserError {
       let ty = self.parse_term()
       self.expect(ColonEqual)
       let body = self.parse_term()
-      Declaration(name, Definition(ty, body))
+      
+      let decl: Decl[STerm] = if is_theorem {
+        Theorem(ty, body)
+      } else {
+        Definition(ty, body)
+      }
+
+      Declaration(name, decl)
     }
     Lparen => {
       let binders = self.parse_binders(until=Colon)
@@ -340,7 +354,14 @@ fn Parser::parse_definition(self: Parser) -> TopLevel[STerm] raise ParserError {
       let body = self.parse_term()
       // introduce lambdas for the binders in the body
       let body_lam = binders.rev_fold(init=body, (acc, binder) => Fun(binder.name, binder.ty, acc))
-      Declaration(name, Definition(ty, body_lam))
+      
+      let decl: Decl[STerm] = if is_theorem {
+        Theorem(ty, body_lam)
+      } else {
+        Definition(ty, body_lam)
+      }
+
+      Declaration(name, decl)
     }
     tok => raise Message("Expected ':' or '(' in definition, got '\{tok}'")
   }

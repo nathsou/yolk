@@ -212,23 +212,23 @@ fn elab_program(program: String) -> Context raise {
   elab.ctx
 }
 
+fn assert_ok(program: String) -> Unit raise {
+  try elab_program(program) |> ignore catch {
+    err => {
+      fail("Invalid program: '\{err}'\n\{program}")
+    }
+  }
+}
+
+fn assert_not_ok(program: String) -> Unit raise {
+  try elab_program(program) |> ignore catch {
+    _ => ()
+  } noraise {
+    _ => fail("Expected invalid program:\n\{program}")
+  }
+}
+
 test "declarations" {
-  fn assert_ok(program: String) -> Unit raise {
-    try elab_program(program) |> ignore catch {
-      err => {
-        fail("Invalid program: '\{err}'\n\{program}")
-      }
-    }
-  }
-
-  fn assert_not_ok(program: String) -> Unit raise {
-    try elab_program(program) |> ignore catch {
-      _ => ()
-    } noraise {
-      _ => fail("Expected invalid program:\n\{program}")
-    }
-  }
-
   assert_ok((
     #|inductive Tree (A : Type) : Type
     #|  | leaf : A -> Tree A  
@@ -371,20 +371,6 @@ test "declarations" {
 }
 
 test "recursor" {
-  fn assert_ok(program: String) -> Unit raise {
-    try elab_program(program) |> ignore catch {
-      err => fail("Invalid program: '\{err}'\n\{program}")
-    }
-  }
-
-  fn assert_not_ok(program: String) -> Unit raise {
-    try elab_program(program) |> ignore catch {
-      _ => ()
-    } noraise {
-      _ => fail("Expected invalid program:\n\{program}")
-    }
-  }
-
   fn assert_has_type(program: String, name: String, expected_ty: String) -> Unit raise {
     let ctx = elab_program(program)
     // Elaborate the expected type in the same context (so user-defined types are available)
@@ -636,4 +622,16 @@ test "iota reduction" {
     "Tree.size Nat (Tree.node Nat (Tree.leaf Nat Nat.zero) (Tree.leaf Nat (Nat.succ Nat.zero)))",
     "Nat.succ (Nat.succ Nat.zero)"
   )
+}
+
+test "proof irrelevance" {
+  assert_ok("theorem proof_irrel (P : Prop) (h1 h2 : P) : Eq P h1 h2 := Eq.refl P h1")
+
+  assert_ok("theorem pi_proof_irrel (P : Prop) (h1 h2 : P) (f : P -> P) : Eq P (f h1) (f h2) := Eq.refl P (f h1)")
+
+  assert_not_ok("theorem not_irrel : Eq Prop True False := Eq.refl Prop True")
+
+  assert_not_ok("theorem diff_types (h : True) (n : Nat) : Eq True h (n : True) := Eq.refl True h")
+
+  assert_not_ok("theorem diff_props (h1 : True) (h2 : False) : Eq True h1 (h2 : True) := Eq.refl True h1")
 }

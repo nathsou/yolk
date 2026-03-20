@@ -80,6 +80,11 @@ pub fn Elaborator::elaborate_decl(self: Elaborator, name: Name, decl: Decl[STerm
       let body_elab = self.elaborate_term_check(body, ty_elab)
       self.ctx.add_decl(name, Definition(ty_elab, body_elab))
     }
+    Theorem(ty, proof) => {
+      let ty_elab = self.elaborate_term(ty)
+      let proof_elab = self.elaborate_term_check(proof, ty_elab)
+      self.ctx.add_decl(name, Theorem(ty_elab, proof_elab))
+    }
     Inductive({ params, constructors, ty }) => {
       self.inductive_type_being_defined = Some(name)
       let original_bound_vars_len = self.bound_vars.length()
