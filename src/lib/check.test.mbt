@@ -1,11 +1,14 @@
 
+///|
 test "is_strictly_positive" {
   let ctx = Context::new()
   let ind = Leaf("Ind")
   let bool = Const(Leaf("Bool"), [])
   assert_true(ctx.is_strictly_positive(Pi(None, bool, bool), ind))
   assert_true(ctx.is_strictly_positive(Pi(None, bool, Const(ind, [])), ind))
-  assert_false(ctx.is_strictly_positive(Pi(None, Const(ind, []), Const(ind, [])), ind))
+  assert_false(
+    ctx.is_strictly_positive(Pi(None, Const(ind, []), Const(ind, [])), ind),
+  )
 }
 
 fn elab_term(term: String, ctx~: Context? = None) -> (Context, Term) raise {

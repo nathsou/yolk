@@ -288,7 +288,7 @@ pub fn Parser::parse(self: Parser) -> Program[STerm] raise ParserError {
 
 fn Parser::parse_top_level(self: Parser) -> TopLevel[STerm] raise ParserError {
   match self.peek() {
-    Axiom => self.parser_axiom()
+    Axiom => self.parse_axiom()
     Def | Theorem => self.parse_definition_or_theorem()
     Hash => self.parse_command()
     Inductive => self.parse_inductive()
@@ -321,7 +321,7 @@ fn Parser::parse_universe_vars(self: Parser) -> Array[UniverseVar] raise ParserE
 
     while self.matches(Comma) {
       self.advance()
-      
+
       if uvs.length() >= MAX_UNIVERSE_VARS {
         raise Message("Too many universe variables (max is \{MAX_UNIVERSE_VARS})")
       }
@@ -335,7 +335,7 @@ fn Parser::parse_universe_vars(self: Parser) -> Array[UniverseVar] raise ParserE
   uvs
 }
 
-fn Parser::parser_axiom(self: Parser) -> TopLevel[STerm] raise ParserError {
+fn Parser::parse_axiom(self: Parser) -> TopLevel[STerm] raise ParserError {
   self.expect(Axiom)
   let name = self.parse_name()
   let uvs = self.parse_universe_vars()
@@ -429,8 +429,8 @@ fn Parser::parse_command(self: Parser) -> TopLevel[STerm] raise ParserError {
   let name = self.expect_var()
   let args: Array[STerm] = []
 
-  while (try? self.parse_term()) is Ok(term) {
-    args.push(term)
+  while self.peek_safe() is Some(tok) && is_term_start(tok) {
+    args.push(self.parse_term())
   }
 
   Command(name, args)
@@ -591,6 +591,14 @@ fn Parser::parse_levels_list(self: Parser) -> Array[Level] raise ParserError {
   }
 }
 
+fn is_term_start(tok: Token) -> Bool {
+  match tok {
+    Fun | Forall | Let | Match => true
+    _ => is_atom_start(tok)
+  }
+}
+
+// make sure that is_term_start is up-to-date with the parse_term definition
 fn Parser::parse_term(self: Parser) -> STerm raise ParserError {
   match self.peek() {
     Fun => self.parse_fun()
@@ -671,7 +679,8 @@ fn Parser::parse_match(self: Parser) -> STerm raise ParserError {
 fn Parser::parse_app(self: Parser) -> STerm raise ParserError {
   let mut lhs = self.parse_atom()
 
-  while (try? self.parse_atom()) is Ok(rhs) {
+  while self.peek_safe() is Some(tok) && is_atom_start(tok) {
+    let rhs = self.parse_atom()
     lhs = App(lhs, rhs)
   }
 
@@ -715,6 +724,14 @@ fn Parser::parse_arrow(self: Parser) -> STerm raise ParserError {
   }
 }
 
+fn is_atom_start(tok: Token) -> Bool {
+  match tok {
+    Var(_) | Path(_) | Prop | Sort | Type | Lparen | Nat(_) => true
+    _ => false
+  }
+}
+
+// make sure that is_atom_start is up-to-date with the parse_atom definition
 fn Parser::parse_atom(self: Parser) -> STerm raise ParserError {
   match self.peek() {
     Var(x) => {

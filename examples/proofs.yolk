@@ -9,19 +9,19 @@ theorem modus_ponens (P Q : Prop) (hpq : P -> Q) (hp : P) : Q := hpq hp
 
 theorem imp_trans (P Q R : Prop) (hpq : P -> Q) (hqr : Q -> R) (hp : P) : R := hqr (hpq hp)
 
-theorem imp_conj (P Q : Prop) (hp : P) (hq : Q) : And P Q := And.intro P Q hp hq
+theorem imp_and (P Q : Prop) (hp : P) (hq : Q) : And P Q := And.intro P Q hp hq
 
-theorem conj_imp_left (P Q : Prop) (hpq : And P Q) : P := And.elim_left P Q hpq
+theorem and_imp_left (P Q : Prop) (hpq : And P Q) : P := And.elim_left P Q hpq
 
-theorem conj_imp_right (P Q : Prop) (hpq : And P Q) : Q := And.elim_right P Q hpq
+theorem and_imp_right (P Q : Prop) (hpq : And P Q) : Q := And.elim_right P Q hpq
 
-theorem disj_imp (P Q : Prop) : (Or (Not P) Q) -> (P -> Q) :=
+theorem or_imp (P Q : Prop) : (Or (Not P) Q) -> (P -> Q) :=
   fun h hp =>
     match h
       | inl hnp => absurd Q (hnp hp)
       | inr hq => hq
 
-theorem conj_swap (P Q : Prop) : (And P Q) -> (And Q P) :=
+theorem and_swap (P Q : Prop) : (And P Q) -> (And Q P) :=
   fun h => And.intro Q P (And.elim_right P Q h) (And.elim_left P Q h)
 
 theorem imp_permut (P Q R : Prop) : P -> (Q -> R) -> Q -> (P -> R) := fun _ hqr hq _ => hqr hq
@@ -31,6 +31,21 @@ theorem imp_rev (P Q : Prop) : P -> Q -> Not Q -> Not P :=
 
 theorem not_imp (P Q : Prop) : Not (P -> Q) -> Not Q :=
   fun hpq hq => hpq (fun _ => hq)
+
+-- Axiom of the Excluded Middle
+axiom Classical.em : forall P : Prop, Or P (Not P)
+
+theorem not_and (P Q : Prop) : Not (And P Q) -> Or (Not P) (Not Q) :=
+  fun (h : Not (And P Q)) => 
+    match Classical.em P
+      | inl hp => Or.inr (Not P) (Not Q) (fun hq => h (And.intro P Q hp hq))
+      | inr hnp => Or.inl (Not P) (Not Q) hnp
+
+theorem not_or (P Q : Prop) : Not (Or P Q) -> And (Not P) (Not Q) :=
+  fun (h : Not (Or P Q)) =>
+    let hnp : Not P := fun hp => h (Or.inl P Q hp) in
+    let hnq : Not Q := fun hq => h (Or.inr P Q hq) in
+    And.intro (Not P) (Not Q) hnp hnq
 
 -- ==== Equality =====
 
