@@ -129,8 +129,8 @@ pub fn Elaborator::elaborate_decl(self: Elaborator, name: Name, decl: Decl[STerm
 
 pub fn Elaborator::elaborate_term(self: Elaborator, term: STerm) -> Term raise {
   match term {
-    Sort(u) => Sort(Level::from(u.reinterpret_as_int()))
-    Var(name) => {
+    Sort(u) => Sort(u)
+    Var(name, _) => {
       for i = self.bound_vars.length() - 1; i >= 0; i = i - 1 {
         if name == Leaf(self.bound_vars[i]) {
           // Check if this bound var is currently open as a FreeVar

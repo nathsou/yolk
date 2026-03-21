@@ -1,7 +1,7 @@
 // Syntax Term from the parser
 pub enum STerm {
-  Sort(UniverseLevel)
-  Var(Name)
+  Sort(Level)
+  Var(Name, Array[Level])
   App(STerm, STerm)
   Fun(String, STerm?, STerm)
   Pi(String?, STerm?, STerm)
@@ -129,7 +129,11 @@ fn STerm::parens(self: STerm, wrap: Bool, logger: &Logger) -> Unit {
 pub impl Show for STerm with output(self: STerm, logger: &Logger) {
   match self {
     Sort(l) => logger.write_object(l)
-    Var(v) => logger.write_object(v)
+    Var(v, []) => logger.write_object(v)
+    Var(v, levels) => {
+      logger.write_object(v)
+      logger.write_iter(levels.iter(), sep=", ", prefix=".{", suffix="}")
+    }
     App(lhs, rhs) => {
       let lhs_needs_parens = lhs is (Fun(_) | Pi(_) | Let(_) | Ann(_))
       let rhs_needs_parens = rhs is (Fun(_) | Pi(_) | Let(_) | Ann(_))

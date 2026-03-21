@@ -294,3 +294,18 @@ theorem Nat.le_trans (a b c : Nat) : Le a b -> Le b c -> Le a c :=
   fun h1 h2 => match h2
     | refl => h1
     | step b' _ ih => Le.step a b' ih
+
+-- #|inductive Le (a : Nat) : Nat -> Prop
+-- #|  | refl : Le a a
+-- #|  | step : forall (b : Nat), Le a b -> Le a (Nat.succ b)
+-- #|
+-- #| def Lt (a b : Nat) : Prop := Le (Nat.succ a) b
+-- #| 
+-- #| def Ge (a b : Nat) : Prop := Le b a
+-- #| 
+-- #| def Gt (a b : Nat) : Prop := Lt b a
+
+-- theorem Nat.zero_or_gtr_zero (n : Nat) : Or (Eq Nat n 0) (Gt n 0) :=
+--   match n
+--     | zero => Or.inl (Eq Nat n 0) (Gt n 0) (Eq.refl Nat 0)
+--     | succ n' _ => 

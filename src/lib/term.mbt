@@ -16,21 +16,21 @@ pub enum Term {
 pub type DeBruijnIndex = UInt
 pub type FreeVarId = UInt
 
-pub type UniverseLevel = UInt
-
 // https://lmf.cnrs.fr/downloads/Perso/long.pdf
 pub enum Level {
   Zero
   Succ(Level)
   Max(Level, Level)
   IMax(Level, Level)
-  Param(String)
+  Param(UniverseVar)
 }
 
-pub fn Level::from(n: Int) -> Level {
+pub type UniverseVar = String
+
+pub fn Level::from(n: UInt) -> Level {
   let mut lvl = Zero
 
-  for _ in 0..<n {
+  for _ in 0..<(n.reinterpret_as_int()) {
     lvl = Succ(lvl)
   }
 
@@ -94,7 +94,7 @@ pub fn Level::simplify(u: Level) -> Level {
       // Simplify the second argument first — IMax is determined by whether l2 is zero
       match l2.simplify() {
         Zero => Zero // IMax(_, 0) = 0
-        Succ(_) as sl2 => Max(l1, sl2).simplify() // IMax(a, b+1) = Max(a, b+1)
+        Succ(_) as sl2 => Level::Max(l1, sl2).simplify() // IMax(a, b+1) = Max(a, b+1)
         sl2 => IMax(l1.simplify(), sl2) // can't reduce further (e.g. Param)
       }
     }
@@ -106,6 +106,7 @@ pub fn Level::simplify(u: Level) -> Level {
 pub fn Level::leq(u: Level, v: Level, n: Int) -> Bool {
   match (u, v) {
     (Zero, _) if n >= 0 => true
+    (l1, l2) if n >= 0 && l1.structural_eq(l2) => true
     (Succ(l1), l2) => l1.leq(l2, n - 1)
     (l1, Succ(l2)) => l1.leq(l2, n + 1)
     (l, Max(l1, l2)) => l.leq(l1, n) || l.leq(l2, n)
@@ -116,7 +117,6 @@ pub fn Level::leq(u: Level, v: Level, n: Int) -> Bool {
     (l, IMax(l1, IMax(l2, l3))) => l.leq(Max(IMax(l1, l3), IMax(l2, l3)), n)
     (IMax(l1, Max(l2, l3)), l) => Max(IMax(l1, l2), IMax(l1, l3)).leq(l, n)
     (l, IMax(l1, Max(l2, l3))) => l.leq(Max(IMax(l1, l2), IMax(l1, l3)), n)
-    (l1, l2) if n >= 0 && l1.structural_eq(l2) => true
     (l1, l2) => {
       // if for all free variable v in l1 and l2,
       // substituting them with Zero and Succ(v) preserves the leq relation, then l1 <= l2
@@ -127,12 +127,12 @@ pub fn Level::leq(u: Level, v: Level, n: Int) -> Bool {
         return false
       }
 
-      for v in fvs {
-        if !(l1.subst(v, Zero).leq(l2.subst(v, Zero), n)) {
+      for fv in fvs {
+        if !(l1.subst(fv, Zero).leq(l2.subst(fv, Zero), n)) {
           return false
         }
 
-        if !(l1.subst(v, Succ(Param(v))).leq(l2.subst(v, Succ(Param(v))), n)) {
+        if !(l1.subst(fv, Succ(Param(fv))).leq(l2.subst(fv, Succ(Param(fv))), n)) {
           return false
         }
       }
@@ -160,50 +160,37 @@ pub impl Eq for Level with equal(self: Level, other: Level) -> Bool {
   s1.leq(s2, 0) && s2.leq(s1, 0)
 }
 
-pub impl Show for Level with output(self: Level, logger: &Logger) {
-  if self.as_nat() is Some(n) {
-    logger.write_string(match n {
-      0 => "Prop"
-      1 => "Type"
-      _ => "Type \{n - 1}"
-    })
+pub impl Show for Level with output(self: Level, logger: &Logger) -> Unit {
+  match self.simplify() {
+    Zero => logger.write_char('0')
+    Succ(l) => {
+      let mut count = 1
+      let mut current = l
 
-    return
-  }
-
-  fn show_lvl(lvl: Level) -> Unit {
-    match lvl.simplify() {
-      Zero => logger.write_char('0')
-      Succ(l) => {
-        let mut count = 1
-        let mut current = l
-
-        while current is Succ(inner) {
-          count += 1
-          current = inner
-        }
-
-        if current is Zero {
-          logger.write_object(count)
-        } else {
-          logger.write_object(count)
-          logger.write_string(" + ")
-          show_lvl(current)
-        }
+      while current is Succ(inner) {
+        count += 1
+        current = inner
       }
-      Max(l1, l2) | IMax(l1, l2) => {
-        logger.write_string(if lvl is Max(_) { "(max " } else { "(imax " })
-        show_lvl(l1)
-        logger.write_string(", ")
-        show_lvl(l2)
+
+      if current is Zero {
+        logger.write_object(count)
+      } else {
+        logger.write_char('(')
+        logger.write_object(current)
+        logger.write_string(" + ")
+        logger.write_object(count)
         logger.write_char(')')
       }
-      Param(name) => logger.write_string(name)
     }
+    Max(l1, l2) | IMax(l1, l2) => {
+      logger.write_string(if self is Max(_) { "(max " } else { "(imax " })
+      logger.write_object(l1)
+      logger.write_char(' ')
+      logger.write_object(l2)
+      logger.write_char(')')
+    }
+    Param(name) => logger.write_string(name)
   }
-
-  logger.write_string("Sort ")
-  show_lvl(self)
 }
 
 pub fn Term::is_alpha_eq(self: Term, other: Term) -> Bool {
@@ -323,7 +310,14 @@ fn Term::fmt(
   show_var_ids~: Bool = false,
 ) -> Unit {
   match self {
-    Sort(l) => logger.write_object(l)
+    Sort(l) => match l.as_nat() {
+      Some(n) => logger.write_string(match n {
+        0 => "Prop"
+        1 => "Type"
+        _ => "Type \{n - 1}"
+      })
+      None => logger.write_object(l)
+    }
     BoundVar(idx) => {
       let eff_idx = bindings.length() - 1 - idx.reinterpret_as_int()
       if eff_idx < 0 {
@@ -558,12 +552,13 @@ test "Level::free_vars" {
 }
 
 test "Level::Show" {
-  assert_eq(Zero.to_string(), "Prop")
-  assert_eq(Succ(Zero).to_string(), "Type")
-  assert_eq(Succ(Succ(Zero)).to_string(), "Type 1")
-  assert_eq(Succ(Succ(Succ(Zero))).to_string(), "Type 2")
-  assert_eq(Param("u").to_string(), "Sort u")
-  assert_eq(Max(Param("u"), Param("v")).to_string(), "Sort (max u, v)")
-  assert_eq(IMax(Param("u"), Param("v")).to_string(), "Sort (imax u, v)")
-  assert_eq(Succ(Param("u")).to_string(), "Sort 1 + u")
+  assert_eq(Zero.to_string(), "0")
+  assert_eq(Succ(Zero).to_string(), "1")
+  assert_eq(Succ(Succ(Zero)).to_string(), "2")
+  assert_eq(Succ(Succ(Succ(Zero))).to_string(), "3")
+  assert_eq(Param("u").to_string(), "u")
+  assert_eq(Max(Param("u"), Param("v")).to_string(), "(max u v)")
+  assert_eq(IMax(Param("u"), Param("v")).to_string(), "(imax u v)")
+  assert_eq(Succ(Param("u")).to_string(), "(u + 1)")
+  assert_eq(IMax(Max(Succ(Zero), Param("u")), Succ(Succ(Succ(Param("v"))))).to_string(), "(imax (max 1 u) (v + 3))")
 }
