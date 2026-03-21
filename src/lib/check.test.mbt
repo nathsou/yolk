@@ -70,16 +70,13 @@ test "type checking" {
   }
 
   assert_type("Prop", "Type")
-  assert_type("Prop", "Type 1") // universe cumulativity
   assert_type("Bool", "Type")
-  assert_type("Bool", "Type 1998")
   assert_type("Type", "Type 1")
   assert_type("Type 0", "Type 1")
   assert_type("(Bool: Type)", "Type")
   assert_type("(true: Bool)", "Bool")
   assert_type("Bool -> Bool", "Type")
   assert_type("((Bool -> Bool): Type)", "Type")
-  assert_type("((Bool -> Bool): Type 1)", "Type 1")
   assert_type("Type -> Bool", "Type 1")
   assert_type("Bool -> Type", "Type 1")
   assert_type("Type -> Type", "Type 1")
@@ -99,6 +96,13 @@ test "type checking" {
   assert_type_err("((fun A: Type => A): Bool)")
   assert_type_err("(Type 7 : Type 5)")
   assert_type_err("(Type 7 : Prop)")
+
+  // impredicativity: Pi into Prop stays in Prop (via IMax)
+  assert_type("forall A: Prop, A -> A", "Prop")
+  assert_type("forall A: Prop, forall B: Prop, A -> B -> A", "Prop")
+  assert_type("forall A: Type, A -> Prop", "Type 1")
+  // Prop as a codomain term has type Type
+  assert_type("forall x: Type 5, Prop", "Type 6")
 
   // church encodings
   {
@@ -164,7 +168,12 @@ test "type checking" {
 
   // universe applications
   assert_type("(fun (A: Type) (x: A) => x) Bool", "Bool -> Bool")
-  assert_type("(fun (A: Type 1) (x: A) => x) Bool", "Bool -> Bool")
+
+  // no cumulativity: Bool : Type, not Type 1
+  assert_type_err("(fun (A: Type 1) (x: A) => x) Bool")
+  assert_type_err("(Prop : Type 1)")
+  assert_type_err("(Bool : Type 1998)")
+  assert_type_err("((Bool -> Bool): Type 1)")
 
   // logical operations (Church encoding)
   {
@@ -625,13 +634,30 @@ test "iota reduction" {
 }
 
 test "proof irrelevance" {
-  assert_ok("theorem proof_irrel (P : Prop) (h1 h2 : P) : Eq P h1 h2 := Eq.refl P h1")
+  let ctx = Context::new()
 
-  assert_ok("theorem pi_proof_irrel (P : Prop) (h1 h2 : P) (f : P -> P) : Eq P (f h1) (f h2) := Eq.refl P (f h1)")
+  // P : Prop, h1 h2 : P → h1 ≡ h2
+  let p_fv = ctx.declare_fresh(Sort(Zero))
+  let p_ty = FreeVar("P", p_fv)
+  let h1_fv = ctx.declare_fresh(p_ty)
+  let h2_fv = ctx.declare_fresh(p_ty)
+  assert_true(ctx.is_def_eq(FreeVar("h1", h1_fv), FreeVar("h2", h2_fv)))
 
+  // f h1 ≡ f h2 for f : P → P (proof irrelevance propagates through functions)
+  let f_fv = ctx.declare_fresh(Pi(None, p_ty, p_ty))
+  let f = FreeVar("f", f_fv)
+  assert_true(ctx.is_def_eq(App(f, FreeVar("h1", h1_fv)), App(f, FreeVar("h2", h2_fv))))
+
+  // Proofs of different props are not equal
+  let q_fv = ctx.declare_fresh(Sort(Zero))
+  let hq_fv = ctx.declare_fresh(FreeVar("Q", q_fv))
+  assert_false(ctx.is_def_eq(FreeVar("h1", h1_fv), FreeVar("hq", hq_fv)))
+
+  // Type-level terms are not proof-irrelevant
+  let b1_fv = ctx.declare_fresh(Const(Leaf("Bool")))
+  let b2_fv = ctx.declare_fresh(Const(Leaf("Bool")))
+  assert_false(ctx.is_def_eq(FreeVar("b1", b1_fv), FreeVar("b2", b2_fv)))
+
+  // Props (True vs False) are types in Prop, not proofs — Eq Prop works since Prop : Type
   assert_not_ok("theorem not_irrel : Eq Prop True False := Eq.refl Prop True")
-
-  assert_not_ok("theorem diff_types (h : True) (n : Nat) : Eq True h (n : True) := Eq.refl True h")
-
-  assert_not_ok("theorem diff_props (h1 : True) (h2 : False) : Eq True h1 (h2 : True) := Eq.refl True h1")
 }

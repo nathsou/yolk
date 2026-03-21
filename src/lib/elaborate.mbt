@@ -129,7 +129,7 @@ pub fn Elaborator::elaborate_decl(self: Elaborator, name: Name, decl: Decl[STerm
 
 pub fn Elaborator::elaborate_term(self: Elaborator, term: STerm) -> Term raise {
   match term {
-    Sort(u) => Sort(u)
+    Sort(u) => Sort(Level::from(u.reinterpret_as_int()))
     Var(name) => {
       for i = self.bound_vars.length() - 1; i >= 0; i = i - 1 {
         if name == Leaf(self.bound_vars[i]) {
@@ -464,7 +464,7 @@ fn Elaborator::elaborate_match(
     match partial_ty {
       Pi(Some(_), minor_ty, rest) => {
         minor_tys.push(minor_ty)
-        partial_ty = instantiate(rest, 0, Sort(0)) // dummy: minors don't depend on each other
+        partial_ty = instantiate(rest, 0, Sort(Zero)) // dummy: minors don't depend on each other
       }
       Pi(None, minor_ty, rest) => {
         minor_tys.push(minor_ty)

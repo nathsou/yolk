@@ -116,14 +116,6 @@ pub fn Name::root(self: Name) -> String {
   }
 }
 
-pub fn show_sort(u: UniverseLevel) -> String {
-  match u {
-    0 => "Prop"
-    1 => "Type" // Type 0
-    _ => "Type \{u - 1}"
-  }
-}
-
 fn STerm::parens(self: STerm, wrap: Bool, logger: &Logger) -> Unit {
   if wrap {
     logger.write_char('(')
@@ -136,7 +128,7 @@ fn STerm::parens(self: STerm, wrap: Bool, logger: &Logger) -> Unit {
 
 pub impl Show for STerm with output(self: STerm, logger: &Logger) {
   match self {
-    Sort(u) => logger.write_string(show_sort(u))
+    Sort(l) => logger.write_object(l)
     Var(v) => logger.write_object(v)
     App(lhs, rhs) => {
       let lhs_needs_parens = lhs is (Fun(_) | Pi(_) | Let(_) | Ann(_))

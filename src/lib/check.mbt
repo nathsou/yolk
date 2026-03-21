@@ -37,7 +37,7 @@ pub fn Context::init_default_inductives(self: Context) -> Unit {
         ("true", Const(Leaf("Bool"))),
         ("false", Const(Leaf("Bool"))),
       ],
-      ty: Sort(1),
+      ty: Sort(Level::from(1)),
     }
     
     try! self.env.add(Leaf("Bool"), Inductive(bool_ind))
@@ -257,13 +257,12 @@ fn Context::check_decl(self: Context, name: Name, decl: Decl[Term]) -> Unit rais
       while rem_ty is Pi(x, arg_ty, rest) {
         let s = self.infer(arg_ty)
         if self.whnf(s) is Sort(u) {
-          if ind_level > 0 && u > ind_level {
+          // ind_level > 0 && u > ind_level
+          if !(IMax(u, ind_level).leq(ind_level, 0)) {
             raise TypeError(
               ctor_ty,
-              (
-                #|Invalid universe level in constructor '\{name}':
-                #|Parameter has type '\{arg_ty}' at universe level '\{u}' which is not less than or equal to the inductive type's resulting universe level '\{ind_level}'")
-              )
+              "Invalid universe level in constructor '\{name}':" +
+              "Parameter has type '\{arg_ty}' at universe level '\{u}' which is not less than or equal to the inductive type's resulting universe level '\{ind_level}'"
             )
           }
 
@@ -391,7 +390,7 @@ fn Context::generate_recursor(self: Context, ind_name: Name, ind: InductiveDecl[
   let num_indices = index_vars.length()
 
   // 3. Get the result universe level
-  let result_level: UniverseLevel = match remaining {
+  let result_level: Level = match remaining {
     Sort(u) => u
     _ => raise TypeError(ind_ty, "Inductive type '\{ind_name}' does not end in a Sort")
   }
@@ -947,7 +946,7 @@ pub impl Show for TypeCheckError with output(self: TypeCheckError, logger) -> Un
 
 pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
   match term {
-    Sort(u) => Sort(u + 1) // Prop : Type 0, Type u : Type (u + 1)
+    Sort(l) => Sort(Succ(l)) // Prop : Type 0, Type u : Type (u + 1)
     Const(name) => {
       if self.env.decls.get(name) is Some(decl) {
         decl.ty()
@@ -987,7 +986,7 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
     }
     Pi(x, arg_ty, body_ty) => {
       let s1 = self.infer(arg_ty)
-      let u1 = if self.whnf(s1) is Sort(u) {
+      let l1 = if self.whnf(s1) is Sort(u) {
         u
       } else {
         raise TypeError(term, "Invalid Pi argument type, got '\{s1}'")
@@ -1001,17 +1000,13 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
         self.infer(body_ty)
       }
 
-      let u2 = if self.whnf(s2) is Sort(u) {
+      let l2 = if self.whnf(s2) is Sort(u) {
         u
       } else {
         raise TypeError(term, "Invalid Pi body type, got '\{s2}'")
       }
 
-      Sort(if u2 == 0 {
-        0 // Impredicativity: If the body is a Prop, the Pi is a Prop
-      } else {
-        u1.max(u2)
-      })
+      Sort(IMax(l1, l2))
     }
     Let(_, val, body) => {
       // check that val is well-typed
@@ -1032,18 +1027,15 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
 
 pub fn Context::check(self: Context, term: Term, ty: Term) -> Unit raise TypeCheckError {
   let inferred_ty = self.infer(term)
-  if !self.is_def_eq(inferred_ty, ty, cumulativity=true) {
+  if !self.is_def_eq(inferred_ty, ty) {
     raise TypeError(term, "Expected type '\{self.normalise(ty)}', got '\{self.normalise(inferred_ty)}'")
   }
 }
 
 // Definitional equality check with interleaved WHNF reduction.
 // Only reduces as much as needed to determine equality, avoiding full normalisation
-// When cumulativity=true, allows universe cumulativity subtyping: Sort(u1) ≤ Sort(u2) when u1 ≤ u2
-// Cumulativity propagates covariantly through Pi codomains and lambda bodies,
-// but Pi domains always use strict equality (as required by contravariance)
-// see https://github.com/digama0/lean-type-theory section 2.2 (Definitional Equality) for details
-fn Context::is_def_eq(self: Context, t1: Term, t2: Term, cumulativity~: Bool = false) -> Bool raise TypeCheckError {
+// see https://github.com/digama0/lean-type-theory section 2.2 (Definitional Equality)
+fn Context::is_def_eq(self: Context, t1: Term, t2: Term) -> Bool raise TypeCheckError {
   // Quick syntactic check before any reduction
   if t1.is_alpha_eq(t2) {
     return true
@@ -1059,11 +1051,9 @@ fn Context::is_def_eq(self: Context, t1: Term, t2: Term, cumulativity~: Bool = f
   }
 
   match (w1, w2) {
-    // Universe equality: strict (u1 == u2) or cumulative (u1 ≤ u2)
-    (Sort(u1), Sort(u2)) => if cumulativity { u1 <= u2 } else { u1 == u2 }
+    (Sort(l1), Sort(l2)) => l1 == l2
 
     // Lambda congruence: Γ ⊢ α ≡ α', Γ,x:α ⊢ e ≡ e' → Γ ⊢ λx:α.e ≡ λx:α'.e'
-    // Parameter types use strict equality, bodies propagate cumulativity
     (Lam(x, a1, b1), Lam(_, a2, b2)) => {
       if !self.is_def_eq(a1, a2) {
         return false
@@ -1071,25 +1061,24 @@ fn Context::is_def_eq(self: Context, t1: Term, t2: Term, cumulativity~: Bool = f
 
       let fresh = self.declare_fresh(a1)
       defer self.free_vars.remove(fresh)
-      self.is_def_eq(open(b1, 0, x, fresh), open(b2, 0, x, fresh), cumulativity~)
+      self.is_def_eq(open(b1, 0, x, fresh), open(b2, 0, x, fresh))
     }
 
     // η-expansion (left): Γ ⊢ e : ∀y:α.β → Γ ⊢ λx:α. e x ≡ e
     (Lam(x, a, b), _) => {
       let fresh = self.declare_fresh(a)
       defer self.free_vars.remove(fresh)
-      self.is_def_eq(open(b, 0, x, fresh), App(w2, FreeVar(x, fresh)), cumulativity~)
+      self.is_def_eq(open(b, 0, x, fresh), App(w2, FreeVar(x, fresh)))
     }
 
     // η-expansion (right)
     (_, Lam(x, a, b)) => {
       let fresh = self.declare_fresh(a)
       defer self.free_vars.remove(fresh)
-      self.is_def_eq(App(w1, FreeVar(x, fresh)), open(b, 0, x, fresh), cumulativity~)
+      self.is_def_eq(App(w1, FreeVar(x, fresh)), open(b, 0, x, fresh))
     }
 
-    // Pi congruence: domains must be strictly equal, codomains propagate cumulativity
-    // Γ ⊢ α ≡ α', Γ,x:α ⊢ β ≤ β' → Γ ⊢ ∀x:α.β ≤ ∀x:α'.β'
+    // Γ ⊢ α ≡ α', Γ,x:α ⊢ e ≡ e' → Γ ⊢ Πx:α.e ≡ Πx:α'.e'
     (Pi(x1, a1, b1), Pi(x2, a2, b2)) => {
       if !self.is_def_eq(a1, a2) {
         return false
@@ -1099,7 +1088,7 @@ fn Context::is_def_eq(self: Context, t1: Term, t2: Term, cumulativity~: Bool = f
       defer self.free_vars.remove(fresh)
       let name1 = match x1 { Some(x) => x; None => "_" }
       let name2 = match x2 { Some(x) => x; None => "_" }
-      self.is_def_eq(open(b1, 0, name1, fresh), open(b2, 0, name2, fresh), cumulativity~)
+      self.is_def_eq(open(b1, 0, name1, fresh), open(b2, 0, name2, fresh))
     }
 
     // For remaining head forms: try structural comparison, then proof irrelevance
@@ -1121,13 +1110,13 @@ fn Context::is_def_eq(self: Context, t1: Term, t2: Term, cumulativity~: Bool = f
       {
         let ty1 = self.infer(w1)
         let s1 = self.whnf(self.infer(ty1))
-        if !(s1 is Sort(0)) {
+        if !(s1 is Sort(Zero)) {
           return false
         }
         
         let ty2 = self.infer(w2)
         let s2 = self.whnf(self.infer(ty2))
-        if !(s2 is Sort(0)) {
+        if !(s2 is Sort(Zero)) {
           return false
         }
 

@@ -1,6 +1,6 @@
 
 pub enum Term {
-  Sort(UniverseLevel) // 0 = Prop, 1 = Type 0, 2 = Type 1, ...
+  Sort(Level) // 0 = Prop, 1 = Type 0, 2 = Type 1, ...
   Const(Name)
   // locally nameless representation: bound variables are represented by their de Bruijn index, free variables have a name
   BoundVar(DeBruijnIndex)
@@ -18,9 +18,197 @@ pub type FreeVarId = UInt
 
 pub type UniverseLevel = UInt
 
+// https://lmf.cnrs.fr/downloads/Perso/long.pdf
+pub enum Level {
+  Zero
+  Succ(Level)
+  Max(Level, Level)
+  IMax(Level, Level)
+  Param(String)
+}
+
+pub fn Level::from(n: Int) -> Level {
+  let mut lvl = Zero
+
+  for _ in 0..<n {
+    lvl = Succ(lvl)
+  }
+
+  lvl
+}
+
+pub fn Level::as_nat(self: Level) -> Option[UInt] {
+  let mut count: UInt = 0
+  let mut current = self
+
+  while current is Succ(inner) {
+    count += 1
+    current = inner
+  }
+
+  if current is Zero {
+    Some(count)
+  } else {
+    None
+  }
+}
+
+pub fn Level::subst(self: Level, param: String, lvl: Level) -> Level {
+  match self {
+    Zero => Zero
+    Succ(l) => Succ(l.subst(param, lvl))
+    Max(l1, l2) => Max(l1.subst(param, lvl), l2.subst(param, lvl))
+    IMax(l1, l2) => IMax(l1.subst(param, lvl), l2.subst(param, lvl))
+    Param(p) => if p == param { lvl } else { self }
+  }
+}
+
+pub fn Level::free_vars(self: Level) -> Set[String] {
+  let fvs: Set[String] = @set.new()
+
+  fn aux (lvl: Level) -> Unit {
+    match lvl {
+      Zero => ()
+      Succ(l) => aux(l)
+      Max(l1, l2) | IMax(l1, l2) => { aux(l1); aux(l2) }
+      Param(u) => { fvs.add(u) }
+    }
+  }
+
+  aux(self)
+  fvs
+}
+
+pub fn Level::simplify(u: Level) -> Level {
+  match u {
+    Zero | Param(_) => u
+    Succ(l) => Succ(l.simplify())
+    Max(l1, l2) => {
+      match (l1.simplify(), l2.simplify()) {
+        (Zero, l) | (l, Zero) => l
+        (Succ(sl1), Succ(sl2)) => Succ(Max(sl1, sl2).simplify())
+        (sl1, sl2) => Max(sl1, sl2)
+      }
+    }
+    IMax(l1, l2) => {
+      // Simplify the second argument first — IMax is determined by whether l2 is zero
+      match l2.simplify() {
+        Zero => Zero // IMax(_, 0) = 0
+        Succ(_) as sl2 => Max(l1, sl2).simplify() // IMax(a, b+1) = Max(a, b+1)
+        sl2 => IMax(l1.simplify(), sl2) // can't reduce further (e.g. Param)
+      }
+    }
+  }
+}
+
+// TODO: implement https://lmf.cnrs.fr/downloads/Perso/long.pdf
+// u <= v + n, see https://github.com/digama0/lean-type-theory section 2.2
+pub fn Level::leq(u: Level, v: Level, n: Int) -> Bool {
+  match (u, v) {
+    (Zero, _) if n >= 0 => true
+    (Succ(l1), l2) => l1.leq(l2, n - 1)
+    (l1, Succ(l2)) => l1.leq(l2, n + 1)
+    (l, Max(l1, l2)) => l.leq(l1, n) || l.leq(l2, n)
+    (Max(l1, l2), l) => l1.leq(l, n) && l2.leq(l, n)
+    (IMax(_, Zero), l) => Zero.leq(l, n)
+    (IMax(l1, Succ(l2)), l) => Max(l1, Succ(l2)).leq(l, n)
+    (IMax(l1, IMax(l2, l3)), l) => Max(IMax(l1, l2), IMax(l2, l3)).leq(l, n)
+    (l, IMax(l1, IMax(l2, l3))) => l.leq(Max(IMax(l1, l3), IMax(l2, l3)), n)
+    (IMax(l1, Max(l2, l3)), l) => Max(IMax(l1, l2), IMax(l1, l3)).leq(l, n)
+    (l, IMax(l1, Max(l2, l3))) => l.leq(Max(IMax(l1, l2), IMax(l1, l3)), n)
+    (l1, l2) if n >= 0 && l1.structural_eq(l2) => true
+    (l1, l2) => {
+      // if for all free variable v in l1 and l2,
+      // substituting them with Zero and Succ(v) preserves the leq relation, then l1 <= l2
+      let fvs = l1.free_vars().union(l2.free_vars())
+
+      if fvs.is_empty() {
+        // No free variables — all structural cases above were exhausted
+        return false
+      }
+
+      for v in fvs {
+        if !(l1.subst(v, Zero).leq(l2.subst(v, Zero), n)) {
+          return false
+        }
+
+        if !(l1.subst(v, Succ(Param(v))).leq(l2.subst(v, Succ(Param(v))), n)) {
+          return false
+        }
+      }
+
+      true
+    }
+  }
+}
+
+/// Structural equality (no normalization, no leq). Used inside leq to avoid circular calls.
+fn Level::structural_eq(self: Level, other: Level) -> Bool {
+  match (self, other) {
+    (Zero, Zero) => true
+    (Succ(a), Succ(b)) => a.structural_eq(b)
+    (Max(a1, b1), Max(a2, b2)) | (IMax(a1, b1), IMax(a2, b2)) =>
+      a1.structural_eq(a2) && b1.structural_eq(b2)
+    (Param(p1), Param(p2)) => p1 == p2
+    _ => false
+  }
+}
+
+pub impl Eq for Level with equal(self: Level, other: Level) -> Bool {
+  let s1 = self.simplify()
+  let s2 = other.simplify()
+  s1.leq(s2, 0) && s2.leq(s1, 0)
+}
+
+pub impl Show for Level with output(self: Level, logger: &Logger) {
+  if self.as_nat() is Some(n) {
+    logger.write_string(match n {
+      0 => "Prop"
+      1 => "Type"
+      _ => "Type \{n - 1}"
+    })
+
+    return
+  }
+
+  fn show_lvl(lvl: Level) -> Unit {
+    match lvl.simplify() {
+      Zero => logger.write_char('0')
+      Succ(l) => {
+        let mut count = 1
+        let mut current = l
+
+        while current is Succ(inner) {
+          count += 1
+          current = inner
+        }
+
+        if current is Zero {
+          logger.write_object(count)
+        } else {
+          logger.write_object(count)
+          logger.write_string(" + ")
+          show_lvl(current)
+        }
+      }
+      Max(l1, l2) | IMax(l1, l2) => {
+        logger.write_string(if lvl is Max(_) { "(max " } else { "(imax " })
+        show_lvl(l1)
+        logger.write_string(", ")
+        show_lvl(l2)
+        logger.write_char(')')
+      }
+      Param(name) => logger.write_string(name)
+    }
+  }
+
+  logger.write_string("Sort ")
+  show_lvl(self)
+}
+
 pub fn Term::is_alpha_eq(self: Term, other: Term) -> Bool {
   match (self, other) {
-    (Sort(u1), Sort(u2)) => u1 == u2
+    (Sort(l1), Sort(l2)) => l1 == l2
     (Const(r1), Const(r2)) => r1 == r2
     (BoundVar(i), BoundVar(j)) => i == j
     (FreeVar(_, id1), FreeVar(_, id2)) => id1 == id2
@@ -135,7 +323,7 @@ fn Term::fmt(
   show_var_ids~: Bool = false,
 ) -> Unit {
   match self {
-    Sort(u) => logger.write_string(show_sort(u))
+    Sort(l) => logger.write_object(l)
     BoundVar(idx) => {
       let eff_idx = bindings.length() - 1 - idx.reinterpret_as_int()
       if eff_idx < 0 {
@@ -272,4 +460,110 @@ test "show term" {
   assert_true(parse("Sort 3").is_alpha_eq(parse("Type 2")))
   assert_true(parse("Type 0").is_alpha_eq(parse("Type")))
   assert_true(parse("Type 1").is_alpha_eq(parse("Type 1")))
+}
+
+test "Level::from and as_nat" {
+  assert_eq(Level::from(0), Zero)
+  assert_eq(Level::from(1), Succ(Zero))
+  assert_eq(Level::from(3), Succ(Succ(Succ(Zero))))
+  assert_eq(Level::from(0).as_nat(), Some(0))
+  assert_eq(Level::from(1).as_nat(), Some(1))
+  assert_eq(Level::from(5).as_nat(), Some(5))
+  assert_eq(Param("u").as_nat(), None)
+  assert_eq(Max(Zero, Succ(Zero)).as_nat(), None)
+}
+
+test "Level::simplify" {
+  assert_eq(Zero.simplify(), Zero)
+  assert_eq(Succ(Succ(Zero)).simplify(), Succ(Succ(Zero)))
+  assert_eq(Param("u").simplify(), Param("u"))
+  // Max identities
+  assert_eq(Max(Zero, Succ(Zero)).simplify(), Succ(Zero))
+  assert_eq(Max(Succ(Zero), Zero).simplify(), Succ(Zero))
+  assert_eq(Max(Succ(Zero), Succ(Zero)).simplify(), Succ(Zero))
+  assert_eq(Max(Succ(Zero), Succ(Succ(Zero))).simplify(), Succ(Succ(Zero)))
+  assert_eq(Max(Succ(Succ(Zero)), Succ(Zero)).simplify(), Succ(Succ(Zero)))
+  // IMax: second arg is zero → zero (impredicativity)
+  assert_eq(IMax(Succ(Zero), Zero).simplify(), Zero)
+  assert_eq(IMax(Succ(Succ(Zero)), Zero).simplify(), Zero)
+  // IMax: second arg is non-zero → Max
+  assert_eq(IMax(Zero, Succ(Zero)).simplify(), Succ(Zero))
+  assert_eq(IMax(Succ(Succ(Zero)), Succ(Zero)).simplify(), Succ(Succ(Zero)))
+  assert_eq(IMax(Succ(Zero), Succ(Succ(Zero))).simplify(), Succ(Succ(Zero)))
+  // Nested IMax simplification
+  assert_eq(IMax(Succ(Succ(Zero)), IMax(Succ(Zero), Succ(Zero))).simplify(), Succ(Succ(Zero)))
+  // IMax with Param stays
+  assert_eq(IMax(Succ(Zero), Param("u")).simplify(), IMax(Succ(Zero), Param("u")))
+}
+
+test "Level::leq" {
+  // concrete level ordering
+  assert_true(Zero.leq(Zero, 0))
+  assert_true(Zero.leq(Succ(Zero), 0))
+  assert_true(Zero.leq(Succ(Succ(Zero)), 0))
+  assert_false(Succ(Zero).leq(Zero, 0))
+  assert_false(Succ(Succ(Zero)).leq(Succ(Zero), 0))
+  assert_true(Succ(Zero).leq(Succ(Zero), 0))
+  assert_true(Succ(Zero).leq(Succ(Succ(Zero)), 0))
+  // with offset
+  assert_true(Succ(Zero).leq(Zero, 1))
+  assert_false(Succ(Zero).leq(Zero, 0))
+  assert_false(Succ(Succ(Zero)).leq(Zero, 1))
+  assert_true(Succ(Succ(Zero)).leq(Zero, 2))
+  // Max
+  assert_true(Max(Succ(Zero), Succ(Succ(Zero))).leq(Succ(Succ(Zero)), 0))
+  assert_false(Max(Succ(Zero), Succ(Succ(Zero))).leq(Succ(Zero), 0))
+  // Param
+  assert_true(Param("u").leq(Param("u"), 0))
+  assert_true(Param("u").leq(Succ(Param("u")), 0))
+  assert_true(Zero.leq(Param("u"), 0))
+}
+
+test "Level equality" {
+  // same concrete levels
+  assert_eq(Level::from(0), Level::from(0))
+  assert_eq(Level::from(3), Level::from(3))
+  // different concrete levels
+  assert_not_eq(Level::from(0), Level::from(1))
+  assert_not_eq(Level::from(2), Level::from(5))
+  // Max normalises
+  assert_eq(Max(Zero, Succ(Zero)), Succ(Zero))
+  assert_eq(Max(Succ(Zero), Succ(Succ(Zero))), Succ(Succ(Zero)))
+  // IMax normalises
+  assert_eq(IMax(Succ(Zero), Zero), Zero)
+  assert_eq(IMax(Succ(Zero), Succ(Zero)), Succ(Zero))
+  // Param equality
+  assert_eq(Param("u"), Param("u"))
+  assert_not_eq(Param("u"), Param("v"))
+}
+
+test "Level::subst" {
+  assert_eq(Param("u").subst("u", Succ(Zero)), Succ(Zero))
+  assert_eq(Param("u").subst("v", Succ(Zero)), Param("u"))
+  assert_eq(Zero.subst("u", Succ(Zero)), Zero)
+  assert_eq(Max(Param("u"), Param("v")).subst("u", Zero), Max(Zero, Param("v")))
+  assert_eq(IMax(Param("u"), Param("u")).subst("u", Succ(Zero)), IMax(Succ(Zero), Succ(Zero)))
+}
+
+test "Level::free_vars" {
+  assert_eq(Zero.free_vars().length(), 0)
+  assert_eq(Succ(Zero).free_vars().length(), 0)
+  assert_eq(Param("u").free_vars().length(), 1)
+  assert_true(Param("u").free_vars().contains("u"))
+  let fvs = Max(Param("u"), IMax(Param("v"), Param("w"))).free_vars()
+  assert_eq(fvs.length(), 3)
+  assert_true(fvs.contains("u"))
+  assert_true(fvs.contains("v"))
+  assert_true(fvs.contains("w"))
+}
+
+test "Level::Show" {
+  assert_eq(Zero.to_string(), "Prop")
+  assert_eq(Succ(Zero).to_string(), "Type")
+  assert_eq(Succ(Succ(Zero)).to_string(), "Type 1")
+  assert_eq(Succ(Succ(Succ(Zero))).to_string(), "Type 2")
+  assert_eq(Param("u").to_string(), "Sort u")
+  assert_eq(Max(Param("u"), Param("v")).to_string(), "Sort (max u, v)")
+  assert_eq(IMax(Param("u"), Param("v")).to_string(), "Sort (imax u, v)")
+  assert_eq(Succ(Param("u")).to_string(), "Sort 1 + u")
 }
