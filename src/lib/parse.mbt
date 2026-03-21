@@ -236,10 +236,6 @@ pub fn Parser::new(tokens: Array[Token]) -> Parser {
   { tokens, index: 0 }
 }
 
-fn Parser::has_next(self: Parser) -> Bool {
-  self.index < self.tokens.length()
-}
-
 fn Parser::peek(self: Parser) -> Token raise ParserError {
   if self.tokens.get(self.index) is Some(token) {
     token
@@ -315,12 +311,37 @@ fn Parser::parse_name(self: Parser) -> Name raise ParserError {
   }
 }
 
+fn Parser::parse_universe_vars(self: Parser) -> Array[UniverseVar] raise ParserError {
+  let uvs: Array[UniverseVar] = []
+
+  if self.matches(Dot) {
+    self.advance()
+    self.expect(Lbrace)
+    uvs.push(self.expect_var())
+
+    while self.matches(Comma) {
+      self.advance()
+      
+      if uvs.length() >= MAX_UNIVERSE_VARS {
+        raise Message("Too many universe variables (max is \{MAX_UNIVERSE_VARS})")
+      }
+
+      uvs.push(self.expect_var())
+    }
+
+    self.expect(Rbrace)
+  }
+
+  uvs
+}
+
 fn Parser::parser_axiom(self: Parser) -> TopLevel[STerm] raise ParserError {
   self.expect(Axiom)
   let name = self.parse_name()
+  let uvs = self.parse_universe_vars()
   self.expect(Colon)
   let ty = self.parse_term()
-  Declaration(name, Axiom(ty))
+  Declaration(name, uvs, Axiom(ty))
 }
 
 fn Parser::parse_definition_or_theorem(self: Parser) -> TopLevel[STerm] raise ParserError {
@@ -332,7 +353,8 @@ fn Parser::parse_definition_or_theorem(self: Parser) -> TopLevel[STerm] raise Pa
   }
 
   let name = self.parse_name()
-  
+  let uvs = self.parse_universe_vars()
+
   match self.peek() {
     Colon => {
       self.advance()
@@ -346,7 +368,7 @@ fn Parser::parse_definition_or_theorem(self: Parser) -> TopLevel[STerm] raise Pa
         Definition(ty, body)
       }
 
-      Declaration(name, decl)
+      Declaration(name, uvs, decl)
     }
     Lparen => {
       let binders = self.parse_binders(until=Colon)
@@ -365,7 +387,7 @@ fn Parser::parse_definition_or_theorem(self: Parser) -> TopLevel[STerm] raise Pa
         Definition(ty, body_lam)
       }
 
-      Declaration(name, decl)
+      Declaration(name, uvs, decl)
     }
     tok => raise Message("Expected ':' or '(' in definition, got '\{tok}'")
   }
@@ -374,6 +396,7 @@ fn Parser::parse_definition_or_theorem(self: Parser) -> TopLevel[STerm] raise Pa
 fn Parser::parse_inductive(self: Parser) -> TopLevel[STerm] raise ParserError {
   self.expect(Inductive)
   let name = self.parse_name()
+  let uvs = self.parse_universe_vars()
   let params: Array[(String, STerm)] = []
 
   if self.matches(Lparen) {
@@ -398,7 +421,7 @@ fn Parser::parse_inductive(self: Parser) -> TopLevel[STerm] raise ParserError {
     constructors.push((ctor_name, ctor_ty))
   }
 
-  Declaration(name, Decl::mk_inductive(params~, arity~, constructors~))
+  Declaration(name, uvs, Decl::mk_inductive(params~, arity~, constructors~))
 }
 
 fn Parser::parse_command(self: Parser) -> TopLevel[STerm] raise ParserError {
@@ -476,17 +499,17 @@ fn Parser::parse_binders(self: Parser, until~: Token) -> Array[Binder] raise Par
   binders  
 }
 
-const MAX_LEVEL: UInt = 1000
+const MAX_LEVEL: UInt = 32 // same as Lean 4
+const MAX_UNIVERSE_VARS: Int = 32
 
 fn Parser::parse_level_atom(self: Parser) -> Level raise ParserError {
   match self.peek() {
     Nat(n) => {
-      self.advance()
-
       if n > MAX_LEVEL {
         raise Message("Universe level '\{n}' is too large (max is \{MAX_LEVEL})")
       }
 
+      self.advance()
       Level::from(n)
     }
     Var(u) => {
@@ -553,6 +576,11 @@ fn Parser::parse_levels_list(self: Parser) -> Array[Level] raise ParserError {
 
     while self.matches(Comma) {
       self.advance()
+
+      if levels.length() >= MAX_UNIVERSE_VARS {
+        raise Message("Too many universe levels (max is \{MAX_UNIVERSE_VARS})")
+      }
+
       levels.push(self.parse_level())
     }
 
@@ -702,19 +730,16 @@ fn Parser::parse_atom(self: Parser) -> STerm raise ParserError {
     Prop => { self.advance(); Sort(Zero) }
     (Sort | Type) as tok => {
       self.advance()
-      if self.has_next() && self.peek() is Nat(u) {
-        self.advance()
-        match tok {
-          Sort => Sort(Level::from(u))
-          _ => Sort(Level::from(u + 1))
-        }
+      let has_level = match self.peek_safe() {
+        Some(Nat(_) | Var(_) | MaxKw | IMaxKw | Lparen) => true
+        _ => false
+      }
+
+      if has_level {
+        let l = self.parse_level()
+        if tok is Sort { Sort(l) } else { Sort(Succ(l)) }
       } else {
-        match tok {
-          Sort => {
-            raise Message("Expected universe level after 'Sort'")
-          }
-          _ => Sort(Level::from(1)) // Type 0
-        }
+        if tok is Sort { Sort(Zero) } else { Sort(Succ(Zero)) }
       }
     }
     Lparen => {
@@ -791,8 +816,8 @@ test "parser" {
   expect_term("Type 0", Sort(Level::from(1)))
   expect_term("Prop", Sort(Zero))
   expect_term("Type 1", Sort(Level::from(2)))
-  expect_term("Type 321", Sort(Level::from(322)))
-  expect_term("Sort 321", Sort(Level::from(321)))
+  expect_term("Type 31", Sort(Level::from(32)))
+  expect_term("Sort 32", Sort(Level::from(32)))
   expect_term("Bool", v("Bool"))
   expect_term("Bool -> Bool", Pi(None, Some(v("Bool")), v("Bool")))
   expect_term("Bool -> Bool -> Bool", Pi(None, Some(v("Bool")), Pi(None, Some(v("Bool")), v("Bool"))))
@@ -819,7 +844,7 @@ test "parser" {
   expect_term("let id: A -> A := fun x: A => x in id", Let("id", Some(Pi(None, Some(v("A")), v("A"))), Fun("x", Some(v("A")), v("x")), v("id")))
   expect_term("id.{1}", Var(Leaf("id"), [Level::from(1)]))
   expect_term("id.{imax u (v + 2)}", Var(Leaf("id"), [IMax(Param("u"), Succ(Succ(Param("v"))))]))
-  expect_term("id.{1 + u}", Var(Leaf("id"), [Succ(Param("u"))]))
+  expect_term("id.{1 + max u v}", Var(Leaf("id"), [Succ(Max(Param("u"), Param("v")))]))
   expect_term("fun (b : Bool) (n : Nat) => n", Fun("b", Some(v("Bool")), Fun("n", Some(v("Nat")), v("n"))))
   // unannotated binders
   expect_term("fun x => x", Fun("x", None, v("x")))
@@ -829,19 +854,19 @@ test "parser" {
   
   expect_top_level(
     "def id : forall A: Type, A := fun A: Type => fun x: A => x",
-    Declaration(Leaf("id"), Definition(Pi(Some("A"), Some(Sort(Level::from(1))), v("A")), Fun("A", Some(Sort(Level::from(1))), Fun("x", Some(v("A")), v("x")))))
+    Declaration(Leaf("id"), [], Definition(Pi(Some("A"), Some(Sort(Level::from(1))), v("A")), Fun("A", Some(Sort(Level::from(1))), Fun("x", Some(v("A")), v("x")))))
   )
 
   expect_top_level("#eval (fun x: Bool => x) true", Command("eval", [App(Fun("x", Some(v("Bool")), v("x")), v("true"))]))
   
   expect_top_level(
     "inductive False : Prop",
-    Declaration(Leaf("False"), Inductive({params: [], constructors: [], ty: Sort(Zero)}))
+    Declaration(Leaf("False"), [], Inductive({params: [], constructors: [], ty: Sort(Zero)}))
   )
 
   expect_top_level(
     "inductive True : Prop | intro : True",
-    Declaration(Leaf("True"), Inductive({params: [], constructors: [("intro", v("True"))], ty: Sort(Zero)}))
+    Declaration(Leaf("True"), [], Inductive({params: [], constructors: [("intro", v("True"))], ty: Sort(Zero)}))
   )
 
   expect_top_level(
@@ -852,6 +877,7 @@ test "parser" {
     ),
     Declaration(
       Leaf("Vec"),
+      [],
       Inductive({
         params: [("A", Sort(Level::from(1)))],
         constructors: [

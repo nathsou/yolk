@@ -1,14 +1,19 @@
 
-priv struct GlobalEnv {
-  decls: Map[Name, Decl[Term]]
+priv struct DeclWithUniverseVars {
+  uvs: Array[UniverseVar]
+  decl: Decl[Term]
 }
 
-fn GlobalEnv::add(self: GlobalEnv, name: Name, decl: Decl[Term]) -> Unit raise TypeCheckError {
+priv struct GlobalEnv {
+  decls: Map[Name, DeclWithUniverseVars]
+}
+
+fn GlobalEnv::add(self: GlobalEnv, name: Name, uvs: Array[UniverseVar], decl: Decl[Term]) -> Unit raise TypeCheckError {
   if self.decls.contains(name) {
     raise DuplicateDeclaration(name)
   }
 
-  self.decls[name] = decl
+  self.decls[name] = { uvs, decl }
 }
 
 struct Context {
@@ -34,25 +39,25 @@ pub fn Context::init_default_inductives(self: Context) -> Unit {
     let bool_ind: InductiveDecl[Term] = {
       params: [],
       constructors: [
-        ("true", Const(Leaf("Bool"))),
-        ("false", Const(Leaf("Bool"))),
+        ("true", Const(Leaf("Bool"), [])),
+        ("false", Const(Leaf("Bool"), [])),
       ],
       ty: Sort(Level::from(1)),
     }
     
-    try! self.env.add(Leaf("Bool"), Inductive(bool_ind))
+    try! self.env.add(Leaf("Bool"), [], Inductive(bool_ind))
 
-    try! self.env.add(Leaf("true"), Constructor(
+    try! self.env.add(Leaf("true"), [], Constructor(
       ind=bool_ind,
-      ty=Const(Leaf("Bool")),
+      ty=Const(Leaf("Bool"), []),
     ))
 
-    try! self.env.add(Leaf("false"), Constructor(
+    try! self.env.add(Leaf("false"), [], Constructor(
       ind=bool_ind,
-      ty=Const(Leaf("Bool")),
+      ty=Const(Leaf("Bool"), []),
     ))
 
-    try! self.generate_recursor(Leaf("Bool"), bool_ind)
+    try! self.generate_recursor(Leaf("Bool"), [], bool_ind)
   }
 
   let builtin =
@@ -89,52 +94,52 @@ pub fn Context::init_default_inductives(self: Context) -> Unit {
     #|    | succ m _ => m
     #|
     #|def Nat.add (m : Nat) : Nat -> Nat :=
-    #|  Nat.rec (fun _ => Nat) m (fun _ ih => Nat.succ ih)
+    #|  Nat.rec.{1} (fun _ => Nat) m (fun _ ih => Nat.succ ih)
     #|
     #|def Nat.mul (m : Nat) : Nat -> Nat :=
-    #|  Nat.rec (fun _ => Nat) Nat.zero (fun _ ih => Nat.add ih m)
+    #|  Nat.rec.{1} (fun _ => Nat) Nat.zero (fun _ ih => Nat.add ih m)
     #|
-    #|inductive Pair (A : Type) (B : Type) : Type
-    #|  | mk : A -> B -> Pair A B
+    #|inductive Pair.{u, v} (A : Type u) (B : Type v) : Type (max u v)
+    #|  | mk : A -> B -> Pair.{u, v} A B
     #|
-    #|def Pair.fst (A : Type) (B : Type) : Pair A B -> A :=
-    #|  Pair.rec A B (fun _ => A) (fun a _ => a)
+    #|def Pair.fst.{u, v} (A : Type u) (B : Type v) (pair : Pair.{u, v} A B) : A :=
+    #|  match pair | mk a _ => a
     #|
-    #|def Pair.snd (A : Type) (B : Type) : Pair A B -> B :=
-    #|  Pair.rec A B (fun _ => B) (fun _ b => b)
+    #|def Pair.snd.{u, v} (A : Type u) (B : Type v) (pair : Pair.{u, v} A B) : B :=
+    #|  match pair | mk _ b => b
     #|
-    #|inductive List (A : Type) : Type
-    #|  | nil : List A
-    #|  | cons : A -> List A -> List A
+    #|inductive List.{u} (A : Type u) : Type u
+    #|  | nil : List.{u} A
+    #|  | cons : A -> List.{u} A -> List.{u} A
     #|
-    #|def List.len (A : Type) (lst : List A) : Nat :=
+    #|def List.len.{u} (A : Type u) (lst : List.{u} A) : Nat :=
     #|  match lst
     #|    | nil => Nat.zero
     #|    | cons _ tl ih => Nat.succ ih
     #|
-    #|inductive Option (A : Type) : Type
-    #|  | none : Option A
-    #|  | some : A -> Option A
+    #|inductive Option.{u} (A : Type u) : Type u
+    #|  | none : Option.{u} A
+    #|  | some : A -> Option.{u} A
     #|
-    #|def Option.map (A : Type) (B : Type) (f : A -> B) (opt : Option A) : Option B :=
+    #|def Option.map.{u, v} (A : Type u) (B : Type v) (f : A -> B) (opt : Option.{u} A) : Option.{v} B :=
     #|  match opt
-    #|    | none => Option.none B
-    #|    | some a => Option.some B (f a)
+    #|    | none => Option.none.{v} B
+    #|    | some a => Option.some.{v} B (f a)
     #|
-    #|def List.head (A : Type) (lst : List A) : Option A :=
+    #|def List.head.{u} (A : Type u) (lst : List.{u} A) : Option.{u} A :=
     #|  match lst
-    #|    | nil => Option.none A
-    #|    | cons h _ _ => Option.some A h
+    #|    | nil => Option.none.{u} A
+    #|    | cons h _ _ => Option.some.{u} A h
     #|
-    #|def List.tail (A : Type) (lst : List A) : List A :=
+    #|def List.tail.{u} (A : Type u) (lst : List.{u} A) : List.{u} A :=
     #|  match lst
     #|    | nil => lst
     #|    | cons _ tl _ => tl
     #|
-    #|def List.map (A : Type) (B : Type) (f : A -> B) (lst : List A) : List B :=
+    #|def List.map.{u, v} (A : Type u) (B : Type v) (f : A -> B) (lst : List.{u} A) : List.{v} B :=
     #|  match lst
-    #|    | nil => List.nil B
-    #|    | cons h tl ih => List.cons B (f h) ih
+    #|    | nil => List.nil.{v} B
+    #|    | cons h tl ih => List.cons.{v} B (f h) ih
     #|
     #|inductive And (P : Prop) (Q : Prop) : Prop
     #|  | intro : P -> Q -> And P Q
@@ -184,17 +189,26 @@ pub fn Context::init_default_inductives(self: Context) -> Unit {
     try! elaborator.elaborate(program)
 }
 
-pub fn Context::add_decl(self: Context, name: Name, decl: Decl[Term]) -> Unit raise TypeCheckError {
-  self.check_decl(name, decl)
-  self.env.add(name, decl)
+pub fn Context::add_decl(self: Context, name: Name, uvs: Array[UniverseVar], decl: Decl[Term]) -> Unit raise TypeCheckError {
+  self.check_decl(name, uvs, decl)
+  self.env.add(name, uvs, decl)
 }
 
-fn Context::check_decl(self: Context, name: Name, decl: Decl[Term]) -> Unit raise TypeCheckError {
+fn Context::check_decl(self: Context, name: Name, uvs: Array[UniverseVar], decl: Decl[Term]) -> Unit raise TypeCheckError {
   let ensure_sort = (decl_name: String, ty: Term) => {
     match self.whnf(self.infer(ty)) {
       Sort(u)  => u
       t => {
         raise TypeError(ty, "Invalid type for '\{decl_name}' '\{name}': expected a sort, got '\{t}'")
+      }
+    }
+  }
+
+  // check that the universe variables are distinct
+  for i in 0..<uvs.length() {
+    for j in (i + 1)..<uvs.length() {
+      if uvs[i] == uvs[j] {
+        raise DuplicateUniverseVar(uvs[i])
       }
     }
   }
@@ -302,7 +316,7 @@ fn is_ind_app(term: Term, ind_name: Name, param_vars: Array[OpenedBinder]) -> Ar
   let n_params = param_vars.length()
 
   match head {
-    Const(c) => {
+    Const(c, _) => {
       if c != ind_name || args.length() < n_params {
         return None
       }
@@ -321,9 +335,9 @@ fn is_ind_app(term: Term, ind_name: Name, param_vars: Array[OpenedBinder]) -> Ar
   }
 }
 
-// Build a Term representing `I param_fvars... extra_args...`
-fn mk_ind_app(ind_name: Name, param_vars: Array[OpenedBinder], extra_args: Array[Term]) -> Term {
-  let mut result = Const(ind_name)
+// Build a Term representing `I.{levels} param_fvars... extra_args...`
+fn mk_ind_app(ind_name: Name, ind_levels: Array[Level], param_vars: Array[OpenedBinder], extra_args: Array[Term]) -> Term {
+  let mut result = Const(ind_name, ind_levels)
 
   for p in param_vars {
     result = App(result, FreeVar(p.name, p.fvar))
@@ -359,7 +373,7 @@ fn close_pi(body: Term, name: String, fvar_id: FreeVarId, fvar_ty: Term) -> Term
 }
 
 /// Generate a recursor declaration for the given inductive type and add it to the environment.
-fn Context::generate_recursor(self: Context, ind_name: Name, ind: InductiveDecl[Term]) -> Unit raise TypeCheckError {
+fn Context::generate_recursor(self: Context, ind_name: Name, uvs: Array[UniverseVar], ind: InductiveDecl[Term]) -> Unit raise TypeCheckError {
   let { params, ty: ind_ty, constructors } = ind
   let num_params = params.length()
   let cleanup: Array[FreeVarId] = []
@@ -395,14 +409,38 @@ fn Context::generate_recursor(self: Context, ind_name: Name, ind: InductiveDecl[
     _ => raise TypeError(ind_ty, "Inductive type '\{ind_name}' does not end in a Sort")
   }
 
+  // Compute level lists for Const nodes
+  let ind_levels: Array[Level] = uvs.map(fn(u) { Level::Param(u) })
+
+  // For large-eliminating inductives (not in Prop), add a fresh universe parameter
+  // so the recursor can eliminate to any sort level
+  let (elim_level, rec_uvs) = {
+    let simplified = result_level.simplify()
+    if simplified is Zero {
+      // Small elimination: motive always maps to Prop
+      (Level::Zero, uvs)
+    } else {
+      // Large elimination: add a fresh universe parameter
+      let mut uv_name = "u_1"
+      let mut i = 1
+      while uvs.contains(uv_name) {
+        i += 1
+        uv_name = "u_\{i}"
+      }
+      let new_uvs = uvs.copy()
+      new_uvs.push(uv_name)
+      (Level::Param(uv_name), new_uvs)
+    }
+  }
+
   // 4. Build the target type: I param_fvars... index_fvars...
   let index_fvar_terms: Array[Term] = index_vars.map(b => FreeVar(b.name, b.fvar))
-  let target_type = mk_ind_app(ind_name, param_vars, index_fvar_terms)
+  let target_type = mk_ind_app(ind_name, ind_levels, param_vars, index_fvar_terms)
 
-  // 5. Build the motive type: forall (indices...), forall (t : I params... indices...), Sort(result_level)
+  // 5. Build the motive type: forall (indices...), forall (t : I params... indices...), Sort(elim_level)
   let motive_target_var_id = self.declare_fresh(target_type)
   cleanup.push(motive_target_var_id)
-  let mut motive_body = Term::Sort(result_level)
+  let mut motive_body = Term::Sort(elim_level)
   let motive_target_name = "t"
   motive_body = close_pi(motive_body, motive_target_name, motive_target_var_id, target_type)
 
@@ -466,7 +504,7 @@ fn Context::generate_recursor(self: Context, ind_name: Name, ind: InductiveDecl[
       Leaf(ctor_name)
     }
 
-    let mut ctor_app = Const(ctor_full_name)
+    let mut ctor_app = Const(ctor_full_name, ind_levels)
     for p in param_vars {
       ctor_app = App(ctor_app, FreeVar(p.name, p.fvar))
     }
@@ -545,7 +583,7 @@ fn Context::generate_recursor(self: Context, ind_name: Name, ind: InductiveDecl[
   }
 
   // 8. Add to the environment
-  self.env.add(Path(ind_name, "rec"), Recursor(
+  self.env.add(Path(ind_name, "rec"), rec_uvs, Recursor(
     ind~,
     ty=rec_result,
     num_params~,
@@ -622,7 +660,7 @@ fn Context::is_valid_inductive_app(
   let n_indices = arity_tys.length() - 1
 
   let head_ok = match head {
-    Const(n) => n == inductive_name
+    Const(n, _) => n == inductive_name
     _ => false
   }
 
@@ -669,15 +707,17 @@ fn Context::lookup_free_var(self: Context, var_id: FreeVarId) -> Term? {
 
 fn Context::normalise(self: Context, term: Term) -> Term raise TypeCheckError {
   match term {
-    Const(name) => {
-      if self.env.decls.get(name) is Some(decl) {
+    Const(name, levels) => {
+      if self.env.decls.get(name) is Some({ uvs, decl }) {
         match decl {
-          // delta reduction: unfold definitions
-          Definition(_, body) => self.normalise(body)
+          // delta reduction: unfold definition
+          Definition(_, body) => {
+            self.normalise(body.subst_levels((uvs, levels)))
+          }
           Axiom(_) | Theorem(_) | Inductive(_) | Constructor(_) | Recursor(_) => term
         }
       } else {
-        Const(name)
+        Const(name, levels)
       }
     }
     App(lhs, rhs) => {
@@ -741,7 +781,7 @@ fn Context::normalise(self: Context, term: Term) -> Term raise TypeCheckError {
 fn extract_indices(term: Term, ind_name: Name, num_params: Int) -> ArrayView[Term]? {
   let (head, args) = term.collect_app_args()
 
-  if head is Const(c) && c == ind_name && args.length() >= num_params {
+  if head is Const(c, _) && c == ind_name && args.length() >= num_params {
     Some(args[num_params:])
   } else {
     None
@@ -749,11 +789,11 @@ fn extract_indices(term: Term, ind_name: Name, num_params: Int) -> ArrayView[Ter
 }
 
 // Try iota reduction: if head is a recursor and the major premise reduces to a constructor, fire the rule
-fn Context::try_iota_reduce(self: Context, head: Term, args: ArrayView[Term]) -> Term? {
-  let rec_name = if head is Const(name) { name } else { return None }
+fn Context::try_iota_reduce(self: Context, head: Term, args: ArrayView[Term]) -> Term? raise TypeCheckError {
+  let (rec_name, rec_levels) = if head is Const(name, levels) { (name, levels) } else { return None }
   let ind_name = Leaf(rec_name.root())
   let (ind, num_params, num_indices, num_minors, rules) = match self.env.decls.get(rec_name) {
-    Some(Recursor(ind~, num_params~, num_indices~, num_minors~, rules~, ..)) =>
+    Some({ decl: Recursor(ind~, num_params~, num_indices~, num_minors~, rules~, ..), .. }) =>
       (ind, num_params, num_indices, num_minors, rules)
     _ => return None
   }
@@ -776,7 +816,7 @@ fn Context::try_iota_reduce(self: Context, head: Term, args: ArrayView[Term]) ->
   // WHNF the major premise to expose the constructor
   let major_whnf = self.whnf(major)
   let (ctor_head, ctor_args) = major_whnf.collect_app_args()
-  let ctor_name = if ctor_head is Const(c) { c } else { return None }
+  let ctor_name = if ctor_head is Const(c, _) { c } else { return None }
 
   // Find which rule (constructor) this matches
   let rule_index = match rules.search_by(r => r.ctor == ctor_name) {
@@ -817,7 +857,7 @@ fn Context::try_iota_reduce(self: Context, head: Term, args: ArrayView[Term]) ->
       }
 
       // Build IH: rec_name params... motive minors... ih_indices... field
-      let mut ih = Const(rec_name)
+      let mut ih = Const(rec_name, rec_levels)
       for p in params {
         ih = App(ih, p)
       }
@@ -859,7 +899,7 @@ fn Context::try_iota_reduce(self: Context, head: Term, args: ArrayView[Term]) ->
 }
 
 // Weak Head Normal Form: only reduce the head of the term, and do not recurse under binders
-pub fn Context::whnf(self: Context, term: Term) -> Term {
+pub fn Context::whnf(self: Context, term: Term) -> Term raise TypeCheckError {
   match term {
     App(f, arg) => {
       // Only evaluate the function part to see if it's a Lam
@@ -880,15 +920,15 @@ pub fn Context::whnf(self: Context, term: Term) -> Term {
       // zeta reduction
       self.whnf(instantiate(body, 0, val))
     }
-    Const(name) => {
-      if self.env.decls.get(name) is Some(decl) {
+    Const(name, levels) => {
+      if self.env.decls.get(name) is Some({ uvs, decl }) {
         match decl {
           // delta reduction
-          Definition(_, body) => self.whnf(body)
+          Definition(_, body) => self.whnf(body.subst_levels((uvs, levels)))
           Axiom(_) | Inductive(_) | Constructor(_) | Recursor(_) | Theorem(_, _) => term
         }
       } else {
-        Const(name)
+        Const(name, levels)
       }
     }
     Ann(lhs, _) => self.whnf(lhs)
@@ -927,6 +967,7 @@ fn close(term: Term, var_id: FreeVarId, idx: DeBruijnIndex) -> Term {
 pub suberror TypeCheckError {
   TypeError(Term, String)
   DuplicateDeclaration(Name)
+  DuplicateUniverseVar(String)
   FreeVarIdOverflow
 }
 
@@ -941,15 +982,18 @@ pub impl Show for TypeCheckError with output(self: TypeCheckError, logger) -> Un
     FreeVarIdOverflow => {
       logger.write_string("Ran out of free variable IDs")
     }
+    DuplicateUniverseVar(name) => {
+      logger.write_string("Duplicate universe variable: '\{name}' is already declared")
+    }
   }
 }
 
 pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
   match term {
     Sort(l) => Sort(Succ(l)) // Prop : Type 0, Type u : Type (u + 1)
-    Const(name) => {
-      if self.env.decls.get(name) is Some(decl) {
-        decl.ty()
+    Const(name, levels) => {
+      if self.env.decls.get(name) is Some({ uvs, decl }) {
+        decl.ty().subst_levels((uvs, levels))
       } else {
         raise TypeError(term, "Unbound reference '\{name}'")
       }
@@ -1096,7 +1140,7 @@ fn Context::is_def_eq(self: Context, t1: Term, t2: Term) -> Bool raise TypeCheck
       let structural_eq = match (w1, w2) {
         // Application congruence
         (App(f1, a1), App(f2, a2)) => self.is_def_eq(f1, f2) && self.is_def_eq(a1, a2)
-        (Const(n1), Const(n2)) => n1 == n2
+        (Const(n1, levels1), Const(n2, levels2)) => n1 == n2 && levels1 == levels2
         (FreeVar(_, id1), FreeVar(_, id2)) => id1 == id2
         (BoundVar(i), BoundVar(j)) => i == j
         _ => false

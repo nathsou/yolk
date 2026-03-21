@@ -1,5 +1,5 @@
 
-def id (A : Type) (x : A) : A := x
+def id.{u} (A : Type u) (x : A) : A := x
 
 -- ==== Propositions and logical connectives =====
 
@@ -158,7 +158,7 @@ theorem Nat.add_right_comm (a b c : Nat) : Eq Nat (a + (b + c)) (a + c + b) :=
 
 theorem Nat.add_left_cancel (a b c : Nat) : Eq Nat (a + b) (a + c) -> Eq Nat b c :=
   match a
-    | zero => fun h => congr_arg2 Nat Nat (0 + b) b (0 + c) c (id Nat) (Nat.zero_add b) (Nat.zero_add c) h
+    | zero => fun h => congr_arg2 Nat Nat (0 + b) b (0 + c) c (id.{0} Nat) (Nat.zero_add b) (Nat.zero_add c) h
     | succ pred ih => fun (h : Eq Nat (Nat.succ pred + b) (Nat.succ pred + c)) =>
       let hs_b : Eq Nat (Nat.succ (pred + b)) (Nat.succ pred + b) := Nat.succ_add_comm pred b in
       let hs_c : Eq Nat (Nat.succ pred + c) (Nat.succ (pred + c)) := Eq.symm Nat (Nat.succ (pred + c)) (Nat.succ pred + c) (Nat.succ_add_comm pred c) in
@@ -294,18 +294,3 @@ theorem Nat.le_trans (a b c : Nat) : Le a b -> Le b c -> Le a c :=
   fun h1 h2 => match h2
     | refl => h1
     | step b' _ ih => Le.step a b' ih
-
--- #|inductive Le (a : Nat) : Nat -> Prop
--- #|  | refl : Le a a
--- #|  | step : forall (b : Nat), Le a b -> Le a (Nat.succ b)
--- #|
--- #| def Lt (a b : Nat) : Prop := Le (Nat.succ a) b
--- #| 
--- #| def Ge (a b : Nat) : Prop := Le b a
--- #| 
--- #| def Gt (a b : Nat) : Prop := Lt b a
-
--- theorem Nat.zero_or_gtr_zero (n : Nat) : Or (Eq Nat n 0) (Gt n 0) :=
---   match n
---     | zero => Or.inl (Eq Nat n 0) (Gt n 0) (Eq.refl Nat 0)
---     | succ n' _ => 
