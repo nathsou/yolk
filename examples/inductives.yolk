@@ -1,35 +1,37 @@
 
-def id (A : Type) (x : A) : A := x
+def id.{u} (A : Sort u) (x : A) : A := x
 
-#valid id Bool true
+#valid id.{1} Bool true
 
 #eval (
-  let lst := List.cons Bool true (List.cons Bool false (List.nil Bool)) in
-  Pair.mk (Option Bool) (List Bool) (List.head Bool lst) (List.tail Bool lst)
+  let lst := List.cons.{0} Bool true (List.cons.{0} Bool false (List.nil.{0} Bool)) in
+  Pair.mk.{0, 0} (Option.{0} Bool) (List.{0} Bool) (List.head.{0} Bool lst) (List.tail.{0} Bool lst)
 )
 
-inductive Vec (A : Type) : Nat -> Type
-  | nil : Vec A Nat.zero
-  | cons : A -> forall n : Nat, Vec A n -> Vec A (Nat.succ n)
+inductive Vec.{u} (A : Type u) : Nat -> Type u
+  | nil : Vec.{u} A Nat.zero
+  | cons : A -> forall n : Nat, Vec.{u} A n -> Vec.{u} A (Nat.succ n)
 
 def one : Nat := Nat.succ Nat.zero
 def two : Nat := Nat.succ one
 def three : Nat := Nat.succ two
 
-#valid Vec (List Bool) three
+#valid Vec.{0} (List.{0} Bool) 3
 
-def vec1 : Vec Bool one := Vec.cons Bool true Nat.zero (Vec.nil Bool)
-def vec2 : Vec Bool two := Vec.cons Bool false one vec1
-def vec3 : Vec Bool three := Vec.cons Bool false two vec2
+def vec1 : Vec.{0} Bool 1 := Vec.cons.{0} Bool true 0 (Vec.nil.{0} Bool)
+def vec2 : Vec.{0} Bool 2 := Vec.cons.{0} Bool false 1 vec1
+def vec3 : Vec.{0} Bool 3 := Vec.cons.{0} Bool false 2 vec2
 
 #valid vec3
 
-#valid Not.intro (And True False)
-#valid Vec.cons
+#valid Bool.rec.{1}
 
-inductive Tree (A : Type) : Type
-  | leaf : A -> Tree A
-  | node : Tree A -> Tree A -> Tree A
+#valid Not.intro (And True False)
+#valid Vec.cons.{11}
+
+inductive Tree.{u} (A : Type u) : Type u
+  | leaf : A -> Tree.{u} A
+  | node : Tree.{u} A -> Tree.{u} A -> Tree.{u} A
 
 #valid Eq.refl Nat Nat.zero
 
@@ -39,30 +41,30 @@ inductive Tree (A : Type) : Type
 
 #valid Nat.pred three
 
-def pair : Pair Bool Nat := Pair.mk Bool Nat true three
-#valid Pair.fst Bool Nat pair
-#valid Pair.snd Bool Nat pair
+def pair : Pair.{0, 0} Bool Nat := Pair.mk.{0, 0} Bool Nat true three
+#valid Pair.fst.{0, 0} Bool Nat pair
+#valid Pair.snd.{0, 0} Bool Nat pair
 
-#eval List.len Nat (List.cons Nat Nat.zero (List.cons Nat one (List.cons Nat two (List.cons Nat three (List.nil Nat)))))
+#eval List.len.{0} Nat (List.cons.{0} Nat 0 (List.cons.{0} Nat 1 (List.cons.{0} Nat 2 (List.cons.{0} Nat 3 (List.nil.{0} Nat)))))
 
 def five : Nat := Nat.add two three
 #eval five
 
-#eval Pair.mk Bool Bool (Bool.not true) (Bool.not false)
+#eval Pair.mk.{0, 0} Bool Bool (Bool.not true) (Bool.not false)
 
 #eval Nat.mul three two
 
-#eval Pair.fst Bool Nat pair
-#eval Pair.snd Bool Nat pair
+#eval Pair.fst.{0, 0} Bool Nat pair
+#eval Pair.snd.{0, 0} Bool Nat pair
 
 #eval Nat.pred three
 
 #eval (
-  let lst := List.cons Nat one (List.cons Nat two (List.cons Nat three (List.nil Nat))) in
-  List.len Nat lst
+  let lst := List.cons.{0} Nat 1 (List.cons.{0} Nat 2 (List.cons.{0} Nat 3 (List.nil.{0} Nat))) in
+  List.len.{0} Nat lst
 )
 
-def Tree.size (A : Type) (t : Tree A) : Nat :=
+def Tree.size.{u} (A : Type u) (t : Tree.{u} A) : Nat :=
   match t
     | leaf _ => one
     | node l r lih rih =>
@@ -71,8 +73,15 @@ def Tree.size (A : Type) (t : Tree A) : Nat :=
         | succ _ ih => Nat.succ ih
 
 #eval (
-  let tree := Tree.node Nat (Tree.leaf Nat one) (Tree.node Nat (Tree.leaf Nat two) (Tree.leaf Nat three)) in
-  Tree.size Nat tree
+  let tree := Tree.node.{0} Nat (Tree.leaf.{0} Nat 1) (Tree.node.{0} Nat (Tree.leaf.{0} Nat 2) (Tree.leaf.{0} Nat 3)) in
+  Tree.size.{0} Nat tree
 )
 
-def Vec.len (A : Type) (n : Nat) (v : Vec A n) : Nat := n
+def Vec.len.{u} (A : Type u) (n : Nat) (v : Vec.{u} A n) : Nat := n
+
+def fact (n : Nat) : Nat :=
+  match n
+    | zero => 1
+    | succ n' ih => (n' + 1) * ih
+
+#eval fact 5

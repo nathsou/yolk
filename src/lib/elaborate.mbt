@@ -32,7 +32,7 @@ pub fn Elaborator::from(ctx: Context) -> Elaborator {
 pub fn Elaborator::elaborate(self: Elaborator, program: Program[STerm], on_command_output~: (String) -> Unit = ignore) -> Unit raise {
   for top_level in program.0 {
     match top_level {
-      Declaration(name, decl) => self.elaborate_decl(name, decl)
+      Declaration(name, uvs, decl) => self.elaborate_decl(name, uvs, decl)
       Command(name, args) => {
         if self.run_command(name, args) is Some(output) {
           on_command_output(output)
@@ -73,21 +73,21 @@ pub fn Elaborator::run_command(self: Elaborator, name: String, args: Array[STerm
   }
 }
 
-pub fn Elaborator::elaborate_decl(self: Elaborator, name: Name, decl: Decl[STerm]) -> Unit raise {
+pub fn Elaborator::elaborate_decl(self: Elaborator, name: Name, uvs: Array[UniverseVar], decl: Decl[STerm]) -> Unit raise {
   match decl {
     Axiom(ty) => {
       let ty_elab = self.elaborate_term(ty)
-      self.ctx.add_decl(name, Axiom(ty_elab))
+      self.ctx.add_decl(name, uvs, Axiom(ty_elab))
     }
     Definition(ty, body) => {
       let ty_elab = self.elaborate_term(ty)
       let body_elab = self.elaborate_term_check(body, ty_elab)
-      self.ctx.add_decl(name, Definition(ty_elab, body_elab))
+      self.ctx.add_decl(name, uvs, Definition(ty_elab, body_elab))
     }
     Theorem(ty, proof) => {
       let ty_elab = self.elaborate_term(ty)
       let proof_elab = self.elaborate_term_check(proof, ty_elab)
-      self.ctx.add_decl(name, Theorem(ty_elab, proof_elab))
+      self.ctx.add_decl(name, uvs, Theorem(ty_elab, proof_elab))
     }
     Inductive({ params, constructors, ty }) => {
       self.inductive_type_being_defined = Some(name)
@@ -107,7 +107,7 @@ pub fn Elaborator::elaborate_decl(self: Elaborator, name: Name, decl: Decl[STerm
       let constructors_elab = constructors.map(ctor => (ctor.0, self.elaborate_term(ctor.1)))
       let ty_elab = self.elaborate_term(ty)
       let ind_elab: InductiveDecl[Term] = { params: params_elab, constructors: constructors_elab, ty: ty_elab }
-      self.ctx.add_decl(name, Inductive(ind_elab))
+      self.ctx.add_decl(name, uvs, Inductive(ind_elab))
 
       for ctor in constructors {
         let mut ctor_ty = ctor.1
@@ -117,10 +117,10 @@ pub fn Elaborator::elaborate_decl(self: Elaborator, name: Name, decl: Decl[STerm
         }
 
         let ctor_ty_elab = self.elaborate_term(ctor_ty)
-        self.ctx.add_decl(Path(name, ctor.0), Constructor(ind=ind_elab, ty=ctor_ty_elab))
+        self.ctx.add_decl(Path(name, ctor.0), uvs, Constructor(ind=ind_elab, ty=ctor_ty_elab))
       }
 
-      self.ctx.generate_recursor(name, ind_elab)
+      self.ctx.generate_recursor(name, uvs, ind_elab)
     }
     Constructor(_) => raise ElaborationError::Message("Constructors must be declared as part of an inductive type")
     Recursor(..) => raise ElaborationError::Message("Recursors are auto-generated and cannot be declared manually")
@@ -130,7 +130,7 @@ pub fn Elaborator::elaborate_decl(self: Elaborator, name: Name, decl: Decl[STerm
 pub fn Elaborator::elaborate_term(self: Elaborator, term: STerm) -> Term raise {
   match term {
     Sort(u) => Sort(u)
-    Var(name) => {
+    Var(name, levels) => {
       for i = self.bound_vars.length() - 1; i >= 0; i = i - 1 {
         if name == Leaf(self.bound_vars[i]) {
           // Check if this bound var is currently open as a FreeVar
@@ -145,7 +145,7 @@ pub fn Elaborator::elaborate_term(self: Elaborator, term: STerm) -> Term raise {
       }
 
       if self.ctx.env.decls.contains(name) || (self.inductive_type_being_defined is Some(ind) && name == ind) {
-        Const(name)
+        Const(name, levels)
       } else {
         raise ElaborationError::Message("Undefined variable: '\{name}'")
       }
@@ -382,12 +382,18 @@ fn Elaborator::elaborate_match(
   let scrutinee_ty_whnf = self.ctx.whnf(scrutinee_ty)
   let (scrutinee_ty_head, scrutinee_ty_params) = scrutinee_ty_whnf.collect_app_args()
   let scrutinee_ty_name = match scrutinee_ty_head {
-    Const(name) => name.root()
+    Const(name, _) => name.root()
     other => raise ElaborationError::Message("Expected scrutinee of 'match' to have an inductive type, got '\{other}'")
   }
 
-  let ind = match self.ctx.env.decls.get(Leaf(scrutinee_ty_name)) {
-    Some(Inductive(ind)) => ind
+  // Extract the inductive's concrete universe levels from the scrutinee type head
+  let ind_levels: Array[Level] = match scrutinee_ty_head {
+    Const(_, levels) => levels
+    _ => []
+  }
+
+  let (ind, uvs) = match self.ctx.env.decls.get(Leaf(scrutinee_ty_name)) {
+    Some({ decl: Inductive(ind), uvs }) => (ind, uvs)
     _ => raise ElaborationError::Message("Expected scrutinee of 'match' to have an inductive type, got '\{scrutinee_ty}'")
   }
 
@@ -398,13 +404,72 @@ fn Elaborator::elaborate_match(
   }
 
   let rec_name = Name::Path(Leaf(scrutinee_ty_name), "rec")
-  let (rec_ty, num_minors) = match self.ctx.env.decls.get(rec_name) {
-    Some(Recursor(ty~, num_minors~, ..)) => (ty, num_minors)
+  let (rec_ty, num_minors, rec_uvs) = match self.ctx.env.decls.get(rec_name) {
+    Some({ decl: Recursor(ty~, num_minors~, ..), uvs }) => (ty, num_minors, uvs)
     _ => raise ElaborationError::Message("No recursor found for inductive type '\{scrutinee_ty_name}'")
   }
 
-  // Walk the recursor type applying only the inductive parameters (not indices) to reach the motive binder.
-  let mut partial_ty = rec_ty
+  // Determine if this recursor uses large elimination (has an extra universe param for the motive level)
+  let is_large_elim = rec_uvs.length() > uvs.length()
+
+  // Determine the elimination level for large-eliminating recursors
+  let rec_levels: Array[Level] = ind_levels.copy()
+  if is_large_elim {
+    let elim_level: Level = match expected_ty {
+      Some(ety) => {
+        match self.ctx.whnf(self.ctx.infer(ety)) {
+          Sort(u) => u
+          _ => {
+            // expected_ty is a term, not a type — try Type level as fallback
+            Level::from(1)
+          }
+        }
+      }
+      None => {
+        // Determine from the explicit motive: walk abstract rec_ty to get the motive arity,
+        // elaborate the motive unchecked, and infer its return sort level
+        let m_sterm = match motive {
+          Some(m) => m
+          None => raise ElaborationError::Message("Match without expected type requires a return type annotation (use 'return <type>')")
+        }
+        let mut abstract_partial = rec_ty
+        for i in 0..<num_ind_params {
+          match abstract_partial {
+            Pi(Some(_), _, body) => { abstract_partial = instantiate(body, 0, scrutinee_ty_params[i]) }
+            Pi(None, _, body) => { abstract_partial = body }
+            _ => raise ElaborationError::Message("Recursor type has fewer params than expected")
+          }
+        }
+        let abstract_motive_ty = match abstract_partial {
+          Pi(_, mty, _) => mty
+          _ => raise ElaborationError::Message("Recursor type missing motive Pi binder")
+        }
+        let n_pi = count_pi_binders(abstract_motive_ty)
+        let n_fun = count_fun_binders(m_sterm)
+        let wrapped: STerm = if n_fun < n_pi {
+          append_anon_binders(m_sterm, n_pi - n_fun)
+        } else {
+          m_sterm
+        }
+        
+        let motive_pre_elab = self.elaborate_term(wrapped)
+        let motive_ty_inferred = self.ctx.infer(motive_pre_elab)
+        let types = motive_ty_inferred.collect_pi_types()
+        
+        match self.ctx.whnf(types[types.length() - 1]) {
+          Sort(u) => u
+          other => raise ElaborationError::Message("Motive does not end in a Sort, got '\{other}'")
+        }
+      }
+    }
+    rec_levels.push(elim_level)
+  }
+
+  // Instantiate the recursor type with concrete levels
+  let rec_ty_concrete = rec_ty.subst_levels((rec_uvs, rec_levels))
+
+  // Walk the concrete recursor type applying only the inductive parameters (not indices) to reach the motive binder.
+  let mut partial_ty = rec_ty_concrete
   for i in 0..<num_ind_params {
     let param = scrutinee_ty_params[i]
     match partial_ty {
@@ -464,7 +529,7 @@ fn Elaborator::elaborate_match(
     match partial_ty {
       Pi(Some(_), minor_ty, rest) => {
         minor_tys.push(minor_ty)
-        partial_ty = instantiate(rest, 0, Sort(0)) // dummy: minors don't depend on each other
+        partial_ty = instantiate(rest, 0, Sort(Zero)) // dummy: minors don't depend on each other
       }
       Pi(None, minor_ty, rest) => {
         minor_tys.push(minor_ty)
@@ -495,7 +560,7 @@ fn Elaborator::elaborate_match(
   })
 
   // Apply only the inductive parameters to the recursor (not indices).
-  let mut rec_app: Term = Const(rec_name)
+  let mut rec_app: Term = Const(rec_name, rec_levels)
   for i in 0..<num_ind_params {
     rec_app = App(rec_app, scrutinee_ty_params[i])
   }

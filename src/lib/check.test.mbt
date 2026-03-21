@@ -1,11 +1,14 @@
 
+///|
 test "is_strictly_positive" {
   let ctx = Context::new()
   let ind = Leaf("Ind")
-  let bool = Const(Leaf("Bool"))
+  let bool = Const(Leaf("Bool"), [])
   assert_true(ctx.is_strictly_positive(Pi(None, bool, bool), ind))
-  assert_true(ctx.is_strictly_positive(Pi(None, bool, Const(ind)), ind))
-  assert_false(ctx.is_strictly_positive(Pi(None, Const(ind), Const(ind)), ind))
+  assert_true(ctx.is_strictly_positive(Pi(None, bool, Const(ind, [])), ind))
+  assert_false(
+    ctx.is_strictly_positive(Pi(None, Const(ind, []), Const(ind, [])), ind),
+  )
 }
 
 fn elab_term(term: String, ctx~: Context? = None) -> (Context, Term) raise {
@@ -70,16 +73,13 @@ test "type checking" {
   }
 
   assert_type("Prop", "Type")
-  assert_type("Prop", "Type 1") // universe cumulativity
   assert_type("Bool", "Type")
-  assert_type("Bool", "Type 1998")
   assert_type("Type", "Type 1")
   assert_type("Type 0", "Type 1")
   assert_type("(Bool: Type)", "Type")
   assert_type("(true: Bool)", "Bool")
   assert_type("Bool -> Bool", "Type")
   assert_type("((Bool -> Bool): Type)", "Type")
-  assert_type("((Bool -> Bool): Type 1)", "Type 1")
   assert_type("Type -> Bool", "Type 1")
   assert_type("Bool -> Type", "Type 1")
   assert_type("Type -> Type", "Type 1")
@@ -99,6 +99,13 @@ test "type checking" {
   assert_type_err("((fun A: Type => A): Bool)")
   assert_type_err("(Type 7 : Type 5)")
   assert_type_err("(Type 7 : Prop)")
+
+  // impredicativity: Pi into Prop stays in Prop (via IMax)
+  assert_type("forall A: Prop, A -> A", "Prop")
+  assert_type("forall A: Prop, forall B: Prop, A -> B -> A", "Prop")
+  assert_type("forall A: Type, A -> Prop", "Type 1")
+  // Prop as a codomain term has type Type
+  assert_type("forall x: Type 5, Prop", "Type 6")
 
   // church encodings
   {
@@ -164,7 +171,12 @@ test "type checking" {
 
   // universe applications
   assert_type("(fun (A: Type) (x: A) => x) Bool", "Bool -> Bool")
-  assert_type("(fun (A: Type 1) (x: A) => x) Bool", "Bool -> Bool")
+
+  // no cumulativity: Bool : Type, not Type 1
+  assert_type_err("(fun (A: Type 1) (x: A) => x) Bool")
+  assert_type_err("(Prop : Type 1)")
+  assert_type_err("(Bool : Type 1)")
+  assert_type_err("((Bool -> Bool): Type 1)")
 
   // logical operations (Church encoding)
   {
@@ -377,7 +389,7 @@ test "recursor" {
     let expected = elab_term(expected_ty, ctx=Some(ctx)).1
     let name_parsed = Parser::new(Lexer::new(name).tokenise()).parse_name()
     match ctx.env.decls.get(name_parsed) {
-      Some(decl) => {
+      Some({ decl, .. }) => {
         let actual_ty = decl.ty()
         if !ctx.is_def_eq(actual_ty, expected) {
           fail("Expected '\{name}' to have type '\{expected}', but got '\{actual_ty}'")
@@ -390,27 +402,27 @@ test "recursor" {
   assert_has_type(
     "",
     "Bool.rec",
-    "forall C: Bool -> Type, C true -> C false -> forall t: Bool, C t"
+    "forall C: Bool -> Sort u_1, C true -> C false -> forall t: Bool, C t"
   )
 
   assert_has_type(
     "",
     "Nat.rec",
-    "forall C: Nat -> Type, C Nat.zero -> (forall n: Nat, C n -> C (Nat.succ n)) -> forall t: Nat, C t"
+    "forall C: Nat -> Sort u_1, C Nat.zero -> (forall n: Nat, C n -> C (Nat.succ n)) -> forall t: Nat, C t"
   )
 
   assert_has_type(
     "",
     "List.rec",
-    "forall A: Type, forall C: List A -> Type, C (List.nil A) -> (forall a: A, forall l: List A, C l -> C (List.cons A a l)) -> forall t: List A, C t"
+    "forall A: Sort (u + 1), forall motive: List.{u} A -> Sort u_1, motive (List.nil.{u} A) -> (forall a1: A, forall a2: List.{u} A, motive a2 -> motive (List.cons.{u} A a1 a2)) -> (forall major: List.{u} A, motive major)"
   )
 
   assert_ok((
-    #|def My.len : forall A : Type, List A -> Nat :=
-    #|  fun (A : Type) =>
-    #|  List.rec A (fun _ : List A => Nat)
+    #|def My.len.{u} : forall A : Type u, List.{u} A -> Nat :=
+    #|  fun (A : Type u) =>
+    #|  List.rec.{u, 1} A (fun _ : List.{u} A => Nat)
     #|    Nat.zero
-    #|    (fun (h : A) (tl : List A) (ih : Nat) => Nat.succ ih)
+    #|    (fun (h : A) (tl : List.{u} A) (ih : Nat) => Nat.succ ih)
   ))
 
   assert_has_type(
@@ -433,7 +445,7 @@ test "recursor" {
     ),
     "Tree.rec",
     (
-      #|forall A: Type, forall C: Tree A -> Type,
+      #|forall A: Type, forall C: Tree A -> Sort u_1,
       #|  (forall a: A, C (Tree.leaf A a)) ->
       #|  (forall l: Tree A, forall r: Tree A, C l -> C r -> C (Tree.node A l r)) ->
       #|  forall t: Tree A, C t
@@ -455,7 +467,7 @@ test "recursor" {
     ),
     "Vec.rec",
     (
-      #|forall A: Type, forall C: forall n: Nat, Vec A n -> Type, C Nat.zero (Vec.nil A) ->
+      #|forall A: Type, forall C: forall n: Nat, Vec A n -> Sort u_1, C Nat.zero (Vec.nil A) ->
       #|  (forall a: A, forall n: Nat, forall v: Vec A n, C n v -> C (Nat.succ n) (Vec.cons A a n v)) -> forall n: Nat, forall t: Vec A n, C n t)
     )
   )
@@ -468,7 +480,7 @@ test "recursor" {
     ),
     "Fin.rec",
     (
-      #|forall C: forall n: Nat, Fin n -> Type, (forall n: Nat, C n (Fin.zero n)) ->
+      #|forall C: forall n: Nat, Fin n -> Sort u_1, (forall n: Nat, C n (Fin.zero n)) ->
       #|  (forall n: Nat, forall f: Fin n, C n f -> C (Nat.succ n) (Fin.succ n f)) -> forall n: Nat, forall t: Fin n, C n t)
     )
   )
@@ -501,13 +513,13 @@ test "recursor" {
     #|  | mk : A -> Wrap A
   ),
     "Wrap.rec",
-    "forall A: Type, forall C: Wrap A -> Type, (forall a: A, C (Wrap.mk A a)) -> forall t: Wrap A, C t"
+    "forall A: Type, forall C: Wrap A -> Sort u_1, (forall a: A, C (Wrap.mk A a)) -> forall t: Wrap A, C t"
   )
 
   // Recursor is well-typed
-  assert_ok("#valid List.rec")
-  assert_ok("#valid Nat.rec")
-  assert_ok("#valid Bool.rec")
+  assert_ok("#valid List.rec.{0, 1}")
+  assert_ok("#valid Nat.rec.{1}")
+  assert_ok("#valid Bool.rec.{1}")
 
   // Recursor name conflicts with an existing declaration
   assert_not_ok((
@@ -530,21 +542,21 @@ test "iota reduction" {
   }
 
   assert_nf(
-    "Bool.rec (fun _ : Bool => Bool) false true true",
+    "Bool.rec.{1} (fun _ : Bool => Bool) false true true",
     "false"
   )
 
   assert_nf(
-    "Bool.rec (fun _ : Bool => Bool) false true false",
+    "Bool.rec.{1} (fun _ : Bool => Bool) false true false",
     "true"
   )
 
   assert_nf(
-    "Nat.rec (fun _ : Nat => Nat) Nat.zero (fun m : Nat => fun ih : Nat => m) Nat.zero",
+    "Nat.rec.{1} (fun _ : Nat => Nat) Nat.zero (fun m : Nat => fun ih : Nat => m) Nat.zero",
     "Nat.zero"
   )
 
-  let pred = "Nat.rec (fun _ : Nat => Nat) Nat.zero (fun m : Nat => fun ih : Nat => m)"
+  let pred = "Nat.rec.{1} (fun _ : Nat => Nat) Nat.zero (fun m : Nat => fun ih : Nat => m)"
   assert_nf(
     "\{pred} (Nat.succ Nat.zero)",
     "Nat.zero"
@@ -555,38 +567,38 @@ test "iota reduction" {
     "Nat.succ Nat.zero"
   )
 
-  let nat_id = "Nat.rec (fun _ : Nat => Nat) Nat.zero (fun (n : Nat) (ih : Nat) => Nat.succ ih)"
+  let nat_id = "Nat.rec.{1} (fun _ : Nat => Nat) Nat.zero (fun (n : Nat) (ih : Nat) => Nat.succ ih)"
   assert_nf("\{nat_id} Nat.zero", "Nat.zero")
   assert_nf("\{nat_id} (Nat.succ Nat.zero)", "Nat.succ Nat.zero")
   let three = "Nat.succ (Nat.succ (Nat.succ Nat.zero))"
   assert_nf("\{nat_id} (\{three})", three)
 
-  let nat_add = "fun (n : Nat) (m : Nat) => Nat.rec (fun _ : Nat => Nat) m (fun (_ : Nat) (ih : Nat) => Nat.succ ih) n"
+  let nat_add = "fun (n : Nat) (m : Nat) => Nat.rec.{1} (fun _ : Nat => Nat) m (fun (_ : Nat) (ih : Nat) => Nat.succ ih) n"
   assert_nf("(\{nat_add}) Nat.zero Nat.zero", "Nat.zero")
   let two = "Nat.succ (Nat.succ Nat.zero)"
   let five = "Nat.succ (Nat.succ (Nat.succ (Nat.succ (Nat.succ Nat.zero))))"
   assert_nf("(\{nat_add}) (\{two}) (\{three})", five)
 
   assert_nf(
-    "List.rec Bool (fun _ : List Bool => Nat) Nat.zero (fun (h : Bool) (tl : List Bool) (ih : Nat) => Nat.succ ih) (List.nil Bool)",
+    "List.rec.{0, 1} Bool (fun _ : List Bool => Nat) Nat.zero (fun (h : Bool) (tl : List Bool) (ih : Nat) => Nat.succ ih) (List.nil Bool)",
     "Nat.zero"
   )
 
   // len [true, false] = 2
   assert_nf(
-    "List.rec Bool (fun _ : List Bool => Nat) Nat.zero (fun (h : Bool) (tl : List Bool) (ih : Nat) => Nat.succ ih) (List.cons Bool true (List.cons Bool false (List.nil Bool)))",
+    "List.rec.{0, 1} Bool (fun _ : List Bool => Nat) Nat.zero (fun (h : Bool) (tl : List Bool) (ih : Nat) => Nat.succ ih) (List.cons Bool true (List.cons Bool false (List.nil Bool)))",
     "Nat.succ (Nat.succ Nat.zero)"
   )
 
   // Pair.fst (Pair.mk true zero) => true
   assert_nf(
-    "Pair.rec Bool Nat (fun _ : Pair Bool Nat => Bool) (fun (a : Bool) (b : Nat) => a) (Pair.mk Bool Nat true Nat.zero)",
+    "Pair.rec.{1} Bool Nat (fun _ : Pair Bool Nat => Bool) (fun (a : Bool) (b : Nat) => a) (Pair.mk Bool Nat true Nat.zero)",
     "true"
   )
 
   // Pair.snd (Pair.mk true zero) => zero
   assert_nf(
-    "Pair.rec Bool Nat (fun _ : Pair Bool Nat => Nat) (fun (a : Bool) (b : Nat) => b) (Pair.mk Bool Nat true Nat.zero)",
+    "Pair.rec.{1} Bool Nat (fun _ : Pair Bool Nat => Nat) (fun (a : Bool) (b : Nat) => b) (Pair.mk Bool Nat true Nat.zero)",
     "Nat.zero"
   )
 
@@ -598,40 +610,57 @@ test "iota reduction" {
 
   // Tree: two recursive arguments
   let tree_program =
-    #|inductive Tree (A : Type) : Type
-    #|  | leaf : A -> Tree A
-    #|  | node : Tree A -> Tree A -> Tree A
+    #|inductive Tree.{u} (A : Type u) : Type u
+    #|  | leaf : A -> Tree.{u} A
+    #|  | node : Tree.{u} A -> Tree.{u} A -> Tree.{u} A
     #|
-    #|def Tree.size (A : Type) : Tree A -> Nat :=
-    #|  Tree.rec A (fun _ => Nat)
+    #|def Tree.size.{u} (A : Type u) : Tree.{u} A -> Nat :=
+    #|  Tree.rec.{u, 1} A (fun _ => Nat)
     #|    (fun _ : A => Nat.succ Nat.zero)
-    #|    (fun (l : Tree A) (r : Tree A) (lih : Nat) (rih : Nat) =>
-    #|      Nat.rec (fun _ => Nat)
+    #|    (fun (l : Tree.{u} A) (r : Tree.{u} A) (lih : Nat) (rih : Nat) =>
+    #|      Nat.rec.{1} (fun _ => Nat)
     #|        rih
     #|        (fun _ ih => Nat.succ ih) lih
     #|    )
     
   assert_nf_with_program(
     tree_program,
-    "Tree.size Bool (Tree.leaf Bool true)",
+    "Tree.size.{0} Bool (Tree.leaf.{0} Bool true)",
     "Nat.succ Nat.zero"
   )
 
   assert_nf_with_program(
     tree_program,
-    "Tree.size Nat (Tree.node Nat (Tree.leaf Nat Nat.zero) (Tree.leaf Nat (Nat.succ Nat.zero)))",
+    "Tree.size.{0} Nat (Tree.node.{0} Nat (Tree.leaf.{0} Nat Nat.zero) (Tree.leaf.{0} Nat (Nat.succ Nat.zero)))",
     "Nat.succ (Nat.succ Nat.zero)"
   )
 }
 
 test "proof irrelevance" {
-  assert_ok("theorem proof_irrel (P : Prop) (h1 h2 : P) : Eq P h1 h2 := Eq.refl P h1")
+  let ctx = Context::new()
 
-  assert_ok("theorem pi_proof_irrel (P : Prop) (h1 h2 : P) (f : P -> P) : Eq P (f h1) (f h2) := Eq.refl P (f h1)")
+  // P : Prop, h1 h2 : P → h1 ≡ h2
+  let p_fv = ctx.declare_fresh(Sort(Zero))
+  let p_ty = FreeVar("P", p_fv)
+  let h1_fv = ctx.declare_fresh(p_ty)
+  let h2_fv = ctx.declare_fresh(p_ty)
+  assert_true(ctx.is_def_eq(FreeVar("h1", h1_fv), FreeVar("h2", h2_fv)))
 
+  // f h1 ≡ f h2 for f : P → P (proof irrelevance propagates through functions)
+  let f_fv = ctx.declare_fresh(Pi(None, p_ty, p_ty))
+  let f = FreeVar("f", f_fv)
+  assert_true(ctx.is_def_eq(App(f, FreeVar("h1", h1_fv)), App(f, FreeVar("h2", h2_fv))))
+
+  // Proofs of different props are not equal
+  let q_fv = ctx.declare_fresh(Sort(Zero))
+  let hq_fv = ctx.declare_fresh(FreeVar("Q", q_fv))
+  assert_false(ctx.is_def_eq(FreeVar("h1", h1_fv), FreeVar("hq", hq_fv)))
+
+  // Type-level terms are not proof-irrelevant
+  let b1_fv = ctx.declare_fresh(Const(Leaf("Bool"), []))
+  let b2_fv = ctx.declare_fresh(Const(Leaf("Bool"), []))
+  assert_false(ctx.is_def_eq(FreeVar("b1", b1_fv), FreeVar("b2", b2_fv)))
+
+  // Props (True vs False) are types in Prop, not proofs — Eq Prop works since Prop : Type
   assert_not_ok("theorem not_irrel : Eq Prop True False := Eq.refl Prop True")
-
-  assert_not_ok("theorem diff_types (h : True) (n : Nat) : Eq True h (n : True) := Eq.refl True h")
-
-  assert_not_ok("theorem diff_props (h1 : True) (h2 : False) : Eq True h1 (h2 : True) := Eq.refl True h1")
 }

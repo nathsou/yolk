@@ -1,7 +1,7 @@
 // Syntax Term from the parser
 pub enum STerm {
-  Sort(UniverseLevel)
-  Var(Name)
+  Sort(Level)
+  Var(Name, Array[Level])
   App(STerm, STerm)
   Fun(String, STerm?, STerm)
   Pi(String?, STerm?, STerm)
@@ -73,7 +73,7 @@ pub fn Decl::mk_inductive(
 }
 
 pub enum TopLevel[T] {
-  Declaration(Name, Decl[T])
+  Declaration(Name, Array[UniverseVar], Decl[T])
   Command(String, Array[T])
 } derive(Eq)
 
@@ -116,14 +116,6 @@ pub fn Name::root(self: Name) -> String {
   }
 }
 
-pub fn show_sort(u: UniverseLevel) -> String {
-  match u {
-    0 => "Prop"
-    1 => "Type" // Type 0
-    _ => "Type \{u - 1}"
-  }
-}
-
 fn STerm::parens(self: STerm, wrap: Bool, logger: &Logger) -> Unit {
   if wrap {
     logger.write_char('(')
@@ -136,8 +128,12 @@ fn STerm::parens(self: STerm, wrap: Bool, logger: &Logger) -> Unit {
 
 pub impl Show for STerm with output(self: STerm, logger: &Logger) {
   match self {
-    Sort(u) => logger.write_string(show_sort(u))
-    Var(v) => logger.write_object(v)
+    Sort(l) => l.show_sort(logger)
+    Var(v, []) => logger.write_object(v)
+    Var(v, levels) => {
+      logger.write_object(v)
+      logger.write_iter(levels.iter(), sep=", ", prefix=".{", suffix="}")
+    }
     App(lhs, rhs) => {
       let lhs_needs_parens = lhs is (Fun(_) | Pi(_) | Let(_) | Ann(_))
       let rhs_needs_parens = rhs is (Fun(_) | Pi(_) | Let(_) | Ann(_))
@@ -224,33 +220,34 @@ pub impl Show for STerm with output(self: STerm, logger: &Logger) {
   }
 }
 
+fn show_universe_vars(uvs: Array[UniverseVar], logger: &Logger) -> Unit {
+  if uvs.length() > 0 {
+    logger.write_iter(uvs.iter(), sep=", ", prefix=".{", suffix="} ")
+  }
+}
+
 pub impl[T: Show] Show for TopLevel[T] with output(self: TopLevel[T], logger: &Logger) {
   match self {
-    Declaration(name, Axiom(ty)) => {
+    Declaration(name, uvs, Axiom(ty)) => {
       logger.write_string("axiom ")
       logger.write_object(name)
+      show_universe_vars(uvs, logger)
       logger.write_string(" : ")
       logger.write_object(ty)
     }
-    Declaration(name, Definition(ty, val)) => {
-      logger.write_string("def ")
+    Declaration(name, uvs, (Definition(ty, val) | Theorem(ty, val)) as decl) => {
+      logger.write_string(if decl is Definition(_) { "def " } else { "theorem " })
       logger.write_object(name)
+      show_universe_vars(uvs, logger)
       logger.write_string(" : ")
       logger.write_object(ty)
       logger.write_string(" := ")
       logger.write_object(val)
     }
-    Declaration(name, Theorem(ty, proof)) => {
-      logger.write_string("theorem ")
-      logger.write_object(name)
-      logger.write_string(" : ")
-      logger.write_object(ty)
-      logger.write_string(" := ")
-      logger.write_object(proof)
-    }
-    Declaration(name, Inductive({ constructors, ty, .. })) => {
+    Declaration(name, uvs, Inductive({ constructors, ty, .. })) => {
       logger.write_string("inductive ")
       logger.write_object(name)
+      show_universe_vars(uvs, logger)
       logger.write_string(" : ")
       logger.write_object(ty)
       logger.write_char('\n')
@@ -263,15 +260,17 @@ pub impl[T: Show] Show for TopLevel[T] with output(self: TopLevel[T], logger: &L
         logger.write_char('\n')
       }
     }
-    Declaration(name, Constructor(ind=_, ty~)) => {
+    Declaration(name, uvs, Constructor(ind=_, ty~)) => {
       logger.write_string("constructor ")
       logger.write_object(name)
+      show_universe_vars(uvs, logger)
       logger.write_string(" : ")
       logger.write_object(ty)
     }
-    Declaration(name, Recursor(ty~, ..)) => {
+    Declaration(name, uvs, Recursor(ty~, ..)) => {
       logger.write_string("recursor ")
       logger.write_object(name)
+      show_universe_vars(uvs, logger)
       logger.write_string(" : ")
       logger.write_object(ty)
     }
