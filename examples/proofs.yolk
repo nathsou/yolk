@@ -35,17 +35,43 @@ theorem not_imp (P Q : Prop) : Not (P -> Q) -> Not Q :=
 -- Axiom of the Excluded Middle
 axiom Classical.em : forall P : Prop, Or P (Not P)
 
-theorem not_and (P Q : Prop) : Not (And P Q) -> Or (Not P) (Not Q) :=
-  fun (h : Not (And P Q)) => 
+theorem not_and_mp (P Q : Prop) : Not (And P Q) -> Or (Not P) (Not Q) :=
+  fun (h : Not (And P Q)) =>
     match Classical.em P
       | inl hp => Or.inr (Not P) (Not Q) (fun hq => h (And.intro P Q hp hq))
       | inr hnp => Or.inl (Not P) (Not Q) hnp
 
-theorem not_or (P Q : Prop) : Not (Or P Q) -> And (Not P) (Not Q) :=
+theorem not_and_mpr (P Q : Prop) : Or (Not P) (Not Q) -> Not (And P Q) :=
+  fun (h1 : Or (Not P) (Not Q)) (h2 : And P Q) =>
+    match h1
+      | inl hnp => let hp := And.elim_left P Q h2 in hnp hp
+      | inr hnq => let hq := And.elim_right P Q h2 in hnq hq
+
+theorem not_and (P Q : Prop) : Iff (Not (And P Q)) (Or (Not P) (Not Q)) :=
+  Iff.intro (Not (And P Q)) (Or (Not P) (Not Q)) (not_and_mp P Q) (not_and_mpr P Q)
+
+theorem not_or_mp (P Q : Prop) : Not (Or P Q) -> And (Not P) (Not Q) :=
   fun (h : Not (Or P Q)) =>
     let hnp : Not P := fun hp => h (Or.inl P Q hp) in
     let hnq : Not Q := fun hq => h (Or.inr P Q hq) in
     And.intro (Not P) (Not Q) hnp hnq
+
+theorem not_or_mpr (P Q : Prop) : And (Not P) (Not Q) -> Not (Or P Q) :=
+  fun (h : And (Not P) (Not Q)) =>
+    match Classical.em P
+    	| inl hp =>
+	    let hnp : Not P := And.elim_left (Not P) (Not Q) h in
+	    absurd (Not (Or P Q)) (hnp hp)
+	| inr hnp =>
+	    fun (h2 : Or P Q) =>
+	      match h2
+	        | inl hp => hnp hp
+	        | inr hq =>
+	            let hnq : Not Q := And.elim_right (Not P) (Not Q) h in
+		          hnq hq
+
+theorem not_or (P Q : Prop) : Iff (Not (Or P Q)) (And (Not P) (Not Q)) :=
+  Iff.intro (Not (Or P Q)) (And (Not P) (Not Q)) (not_or_mp P Q) (not_or_mpr P Q)
 
 -- ==== Equality =====
 
@@ -129,7 +155,7 @@ theorem Nat.succ_neq_zero (n : Nat) : Neq Nat (Nat.succ n) 0 :=
       | zero => False
       | succ _ _ => True
   in
-  fun (h : Eq Nat (Nat.succ n) 0) => 
+  fun (h : Eq Nat (Nat.succ n) 0) =>
     Eq.subst Nat (Nat.succ n) 0 discriminator h True.intro
 
 -- a + b = b + a => a + (b + 1) = (b + 1) + a
@@ -145,12 +171,17 @@ theorem Nat.add_comm (a b : Nat) : Eq Nat (a + b) (b + a) :=
   match b
     | zero => Eq.symm Nat (0 + a) a (Nat.zero_add a)
     | succ pred ih => add_comm_rec a pred ih
-  
+
 -- addition is associative: (a + b) + c = a + (b + c)
 theorem Nat.add_assoc (a b c : Nat) : Eq Nat (a + b + c) (a + (b + c)) :=
   match c
     | zero => Eq.refl Nat (a + b)
-    | succ pred ih => congr_arg Nat Nat (a + b + pred) (a + (b + pred)) Nat.succ ih
+    | succ c' ih => congr_arg Nat Nat (a + b + c') (a + (b + c')) Nat.succ ih
+
+theorem Nat.add_left_assoc (a b c : Nat) : Eq Nat (a + b + c) ((a + b) + c) :=
+  match c
+    | zero => Eq.refl Nat (a + b)
+    | succ c' ih => congr_arg Nat Nat (a + b + c') ((a + b) + c') Nat.succ ih
 
 -- a + (b + c) = b + (a + c)
 theorem Nat.add_left_comm (a b c : Nat) : Eq Nat (a + (b + c)) (b + (a + c)) :=
@@ -294,6 +325,49 @@ theorem Nat.two_mul (a : Nat) : Eq Nat (2 * a) (a + a) :=
   let h1 : Eq Nat (2 * a) (a * 2) := Nat.mul_comm 2 a in
   let h2 : Eq Nat (a * 2) (a + a) := Nat.mul_two a in
   Eq.trans Nat (2 * a) (a * 2) (a + a) h1 h2
+
+-- theorem Nat.sum_square (a b : Nat) : Eq Nat ((a + b) * (a + b)) (a*a + 2*a*b + b*b) :=
+-- theorem Nat.add_mul (a b c : Nat) : Eq Nat ((a + b) * c) (a * c + b * c) :=
+-- theorem Nat.mul_add (a b c : Nat) : Eq Nat (a * (b + c)) (a * b + a * c) :=
+
+-- if P(a) holds, and a = b, then P(b) holds
+-- theorem Eq.subst (A : Type) (a b : A) (P : A -> Prop) (h1 : Eq A a b) (h2 : P a) : P b :=
+
+-- if a = b, then f(a) = f(b)
+-- theorem congr_arg (A B : Type) (a1 a2 : A) (f : A -> B) (h : Eq A a1 a2) : Eq B (f a1) (f a2) :=
+-- theorem Nat.add_assoc (a b c : Nat) : Eq Nat (a + b + c) (a + (b + c)) :=
+-- theorem Eq.symm (A : Type) (a b : A) (h : Eq A a b) : Eq A b a :=
+-- theorem Nat.add_left_assoc (a b c : Nat) : Eq Nat (a + b + c) ((a + b) + c) :=
+
+theorem Nat.add_assoc_4 (a b c d : Nat) : Eq Nat (a + b + c + d) ((a + b) + (c + d)) :=
+  match d
+    | zero => Eq.refl Nat ((a + b) + c)
+    | succ d' ih => congr_arg Nat Nat (a + b + c + d') ((a + b) + (c + d')) Nat.succ ih
+
+theorem Nat.add_assoc_4' (a b c d : Nat) : Eq Nat (a + b + c + d) (a + (b + c) + d) :=
+   match d
+     | zero =>
+        Eq.trans Nat (a + b + c + 0) (a + b + c) (a + (b + c)) (Eq.refl Nat (a + b + c)) (Nat.add_assoc a b c)
+     | succ d' ih =>
+        congr_arg Nat Nat (a + b + c + d') (a + (b + c) + d') Nat.succ ih
+
+theorem square_of_sum (a b : Nat) : Eq Nat ((a + b) * (a + b)) (a*a + 2*(a*b) + b*b) :=
+    let ha : Eq Nat (a * (a + b)) (a*a + a*b) := Nat.mul_add a a b in
+    let hb : Eq Nat (a * (a + b) + b * (a + b)) ((a*a + a*b) + b * (a + b)) := congr_arg Nat Nat (a * (a + b)) (a*a + a*b) (fun x => x + b * (a + b)) ha in
+    let hc : Eq Nat (b * (a + b)) (b*a + b*b) := Nat.mul_add b a b in
+    let hd : Eq Nat ((a*a + a*b) + b * (a + b)) ((a*a + a*b) + (b*a + b*b)) := congr_arg Nat Nat (b * (a + b)) (b*a + b*b) (fun x => (a*a + a*b) + x) hc in
+    let he : Eq Nat ((a*a + a*b) + (b*a + b*b)) (a*a + a*b + b*a + b*b) := Eq.symm Nat (a*a + a*b + b*a + b*b) ((a*a + a*b) + (b*a + b*b)) (Nat.add_assoc_4 (a*a) (a*b) (b*a) (b*b)) in
+    let hf : Eq Nat (b*a) (a*b) := Nat.mul_comm b a in
+    let hg : Eq Nat (a*b + b*a) (a*b + a*b) := congr_arg Nat Nat (b*a) (a*b) (fun x => a*b + x) hf in
+    let hh : Eq Nat (a*b + a*b) (2*(a*b)) := Eq.symm Nat (2*(a*b)) (a*b + a*b) (Nat.two_mul (a*b)) in
+    let hi : Eq Nat (a*b + b*a) (2*(a*b)) := Eq.trans Nat (a*b + b*a) (a*b + a*b) (2*(a*b)) hg hh in
+    let hj : Eq Nat (a*a + (a*b + b*a) + b*b) (a*a + 2*(a*b) + b*b) := congr_arg Nat Nat (a*b + b*a) (2*(a*b)) (fun x => a*a + x + b*b) hi in
+    let hk : Eq Nat (a*a + a*b + b*a + b*b) (a*a + (a*b + b*a) + b*b) := Nat.add_assoc_4' (a*a) (a*b) (b*a) (b*b) in
+    let hl : Eq Nat (a*a + a*b + b*a + b*b) (a*a + 2*(a*b) + b*b) := Eq.trans Nat (a*a + a*b + b*a + b*b) (a*a + (a*b + b*a) + b*b) (a*a + 2*(a*b) + b*b) hk hj in
+    let hm : Eq Nat ((a + b) * (a + b)) ((a*a + a*b) + b * (a + b)) := Eq.trans Nat ((a + b) * (a + b)) (a * (a + b) + b * (a + b)) ((a*a + a*b) + b * (a + b)) (Nat.add_mul a b (a + b)) hb in
+    let hn : Eq Nat ((a + b) * (a + b)) ((a*a + a*b) + (b*a + b*b)) := Eq.trans Nat ((a + b) * (a + b)) ((a*a + a*b) + b * (a + b)) ((a*a + a*b) + (b*a + b*b)) hm hd in
+    let ho : Eq Nat ((a + b) * (a + b)) (a*a + a*b + b*a + b*b) := Eq.trans Nat ((a + b) * (a + b)) ((a*a + a*b) + (b*a + b*b)) (a*a + a*b + b*a + b*b) hn he in
+    Eq.trans Nat ((a + b) * (a + b)) (a*a + a*b + b*a + b*b) (a*a + 2*(a*b) + b*b) ho hl
 
 -- ===== Inequalities =====
 

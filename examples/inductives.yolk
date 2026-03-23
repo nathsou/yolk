@@ -79,9 +79,20 @@ def Tree.size.{u} (A : Type u) (t : Tree.{u} A) : Nat :=
 
 def Vec.len.{u} (A : Type u) (n : Nat) (v : Vec.{u} A n) : Nat := n
 
-def fact (n : Nat) : Nat :=
+def Nat.fact (n : Nat) : Nat :=
   match n
     | zero => 1
     | succ n' ih => (n' + 1) * ih
 
-#eval fact 5
+#eval Nat.fact 5
+
+def Nat.exp (base power : Nat) : Nat :=
+  match power
+    | zero => 1
+    | succ _ ih => base * ih
+
+#eval Nat.exp 3 5
+
+def fact' (n : Nat) : Nat := List.prod (List.range_rev n)
+
+#eval (List.map.{0, 0} Nat Nat (fun (n : Nat) => n + 3) (List.range_rev 10))

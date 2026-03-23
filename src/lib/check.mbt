@@ -80,6 +80,15 @@ pub fn Context::init_default_inductives(self: Context) -> Unit {
     #|
     #|def absurd (A : Prop) (f : False) : A := False.elim A f
     #|
+    #|inductive Iff (P Q : Prop) : Prop
+    #|  | intro : (P -> Q) -> (Q -> P) -> Iff P Q
+    #|
+    #|def Iff.mp (P Q : Prop) (iff : Iff P Q) : P -> Q :=
+    #|  match iff | intro mp _ => mp
+    #|
+    #|def Iff.mpr (P Q : Prop) (iff : Iff P Q) : Q -> P :=
+    #|  match iff | intro _ mpr => mpr
+    #|
     #|inductive Nat : Type
     #|  | zero : Nat
     #|  | succ : Nat -> Nat
@@ -116,6 +125,22 @@ pub fn Context::init_default_inductives(self: Context) -> Unit {
     #|  match lst
     #|    | nil => Nat.zero
     #|    | cons _ tl ih => Nat.succ ih
+    #|
+    #|def List.fold.{u, v} (A : Type u) (B : Type v) (init : B) (f : A -> B -> B) (lst : List.{u} A) : B :=
+    #|  match lst
+    #|    | nil => init
+    #|    | cons h tl ih => f h ih
+    #|
+    #|def List.range_rev (n : Nat) : List.{0} Nat :=
+    #|  match n
+    #|    | zero => List.nil.{0} Nat
+    #|    | succ n' ih => List.cons.{0} Nat (n' + 1) ih 
+    #|
+    #|def List.sum : (List.{0} Nat) -> Nat :=
+    #|  List.fold.{0, 0} Nat Nat 0 (fun (n acc : Nat) => n + acc)
+    #|
+    #|def List.prod : (List.{0} Nat) -> Nat :=
+    #|  List.fold.{0, 0} Nat Nat 1 (fun (n acc : Nat) => n * acc)
     #|
     #|inductive Option.{u} (A : Type u) : Type u
     #|  | none : Option.{u} A
@@ -157,19 +182,9 @@ pub fn Context::init_default_inductives(self: Context) -> Unit {
     #|inductive Unit : Type
     #|  | unit : Unit
     #|
-    #|inductive Either (A : Type) (B : Type) : Type
-    #|  | left : A -> Either A B
-    #|  | right : B -> Either A B
-    #|
-    #|def Either.is_left (A : Type) (B : Type) (e : Either A B) : Bool :=
-    #|  match e
-    #|    | left _ => true
-    #|    | right _ => false
-    #|
-    #|def Either.is_right (A : Type) (B : Type) (e : Either A B) : Bool :=
-    #|  match e
-    #|    | left _ => false
-    #|    | right _ => true
+    #|inductive Sum.{u, v} (A : Type u) (B : Type v) : Type (max u v)
+    #|  | left : A -> Sum.{u, v} A B
+    #|  | right : B -> Sum.{u, v} A B
     #|
     #|inductive Le (a : Nat) : Nat -> Prop
     #|  | refl : Le a a
