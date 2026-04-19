@@ -4,11 +4,56 @@ pub enum Token {
   Plus; Star
   Sort; Prop; Type; Fun; Forall; Let; In; Def; Axiom; Theorem; Inductive; Match; Return; MaxKw; IMaxKw
   Nat(UInt); Var(String); Path(Name)
-} derive(Show, Eq)
+} derive(Eq)
+
+pub impl Show for Token with output(self: Token, logger: &Logger) {
+  match self {
+    Lparen => logger.write_char('(')
+    Rparen => logger.write_char(')')
+    Colon => logger.write_char(':')
+    Comma => logger.write_char(',')
+    Dot => logger.write_char('.')
+    Arrow => logger.write_string("->")
+    ThickArrow => logger.write_string("=>")
+    Hash => logger.write_char('#')
+    Pipe => logger.write_char('|')
+    ColonEqual => logger.write_string(":=")
+    Lbrace => logger.write_char('{')
+    Rbrace => logger.write_char('}')
+    Plus => logger.write_char('+')
+    Star => logger.write_char('*')
+    Sort => logger.write_string("Sort")
+    Prop => logger.write_string("Prop")
+    Type => logger.write_string("Type")
+    Fun => logger.write_string("fun")
+    Forall => logger.write_string("forall")
+    Let => logger.write_string("let")
+    In => logger.write_string("in")
+    Def => logger.write_string("def")
+    Axiom => logger.write_string("axiom")
+    Theorem => logger.write_string("theorem")
+    Inductive => logger.write_string("inductive")
+    Match => logger.write_string("match")
+    Return => logger.write_string("return")
+    MaxKw => logger.write_string("max")
+    IMaxKw => logger.write_string("imax")
+    Nat(n) => logger.write_object(n)
+    Var(name) => logger.write_string(name)
+    Path(name) => logger.write_object(name)
+  }
+}
 
 pub suberror LexerError {
   UnexpectedChar(char~: Char, index~: Int)
-} derive(Show)
+}
+
+pub impl Show for LexerError with output(self: LexerError, logger: &Logger) {
+  match self {
+    UnexpectedChar(char~, index~) => {
+      logger.write_string("Unexpected character '\{char}' at index \{index}")
+    }
+  }
+}
 
 pub(all) struct Lexer {
   input: Array[Char]
@@ -230,7 +275,16 @@ pub suberror ParserError {
   Expected(expected~: Token, received~: Token)
   Message(String)
   UnexpectedEOF
-} derive(Show, Eq)
+} derive(Eq)
+
+pub impl Show for ParserError with output(self: ParserError, logger: &Logger) {
+  match self {
+    UnexpectedToken(tok) => logger.write_string("Unexpected token '\{tok}'")
+    Expected(expected~, received~) => logger.write_string("Expected token '\{expected}', got '\{received}'")
+    Message(msg) => logger.write_string(msg)
+    UnexpectedEOF => logger.write_string("Unexpected end of file")
+  }
+}
 
 pub fn Parser::new(tokens: Array[Token]) -> Parser {
   { tokens, index: 0 }

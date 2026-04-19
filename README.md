@@ -19,7 +19,7 @@ yolk ./examples/proofs.yolk
 Install [Moonbit](https://www.moonbitlang.com/):
 
 ```bash
-$ curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash -s '0.8.3+cd28f524e'
+$ curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash -s '0.9.0+8a8d0e4df'
 moon run src/main/main.mbt
 ```
 

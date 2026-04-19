@@ -702,7 +702,7 @@ fn Context::is_valid_inductive_app(
 
 fn Context::fresh_var_id(self: Context) -> FreeVarId raise TypeCheckError {
   let id = self.next_free_var_id
-  if id == @uint.max_value {
+  if id == @uint.MAX_VALUE {
     raise FreeVarIdOverflow
   }
 

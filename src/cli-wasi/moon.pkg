@@ -12,5 +12,6 @@ options(
     "wasm": { "export-memory-name": "memory", "exports": ["start:_start"] }, 
   },
   "is-main": false,
-  "supported-targets": "wasm",
 )
+
+supported_targets = "wasm"

@@ -1,5 +1,5 @@
 
-def id.{u} (A : Type u) (x : A) : A := x
+def id.{u} (A : Sort u) (x : A) : A := x
 
 -- ==== Propositions and logical connectives =====
 
@@ -32,8 +32,16 @@ theorem imp_rev (P Q : Prop) : P -> Q -> Not Q -> Not P :=
 theorem not_imp (P Q : Prop) : Not (P -> Q) -> Not Q :=
   fun hpq hq => hpq (fun _ => hq)
 
+-- the law of the excluded middle implies double negation elimination
+theorem em_imp_dne (A : Prop) (hem : Or A (Not A)) (hnn : Not (Not A)) : A :=
+  match hem
+    | inl ha => ha
+    | inr hna => absurd A (hnn hna)
+
 -- Axiom of the Excluded Middle
 axiom Classical.em : forall P : Prop, Or P (Not P)
+
+theorem dne (P : Prop) (hnn : Not (Not P)) : P := em_imp_dne P (Classical.em P) hnn
 
 theorem not_and_mp (P Q : Prop) : Not (And P Q) -> Or (Not P) (Not Q) :=
   fun (h : Not (And P Q)) =>
@@ -72,6 +80,8 @@ theorem not_or_mpr (P Q : Prop) : And (Not P) (Not Q) -> Not (Or P Q) :=
 
 theorem not_or (P Q : Prop) : Iff (Not (Or P Q)) (And (Not P) (Not Q)) :=
   Iff.intro (Not (Or P Q)) (And (Not P) (Not Q)) (not_or_mp P Q) (not_or_mpr P Q)
+
+theorem imp_not_not (A : Prop) (ha : A) : Not (Not A) := fun hn : Not A => hn ha
 
 -- ==== Equality =====
 
@@ -204,7 +214,7 @@ theorem Nat.add_right_comm (a b c : Nat) : Eq Nat (a + (b + c)) (a + c + b) :=
 
 theorem Nat.add_left_cancel (a b c : Nat) : Eq Nat (a + b) (a + c) -> Eq Nat b c :=
   match a
-    | zero => fun h => congr_arg2 Nat Nat (0 + b) b (0 + c) c (id.{0} Nat) (Nat.zero_add b) (Nat.zero_add c) h
+    | zero => fun h => congr_arg2 Nat Nat (0 + b) b (0 + c) c (id.{1} Nat) (Nat.zero_add b) (Nat.zero_add c) h
     | succ pred ih => fun (h : Eq Nat (Nat.succ pred + b) (Nat.succ pred + c)) =>
       let hs_b : Eq Nat (Nat.succ (pred + b)) (Nat.succ pred + b) := Nat.succ_add_comm pred b in
       let hs_c : Eq Nat (Nat.succ pred + c) (Nat.succ (pred + c)) := Eq.symm Nat (Nat.succ (pred + c)) (Nat.succ pred + c) (Nat.succ_add_comm pred c) in
