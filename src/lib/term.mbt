@@ -8,7 +8,6 @@ pub enum Term {
   App(Term, Term)
   Lam(String, Term, Term)
   Pi(String?, Term, Term)
-  // in a dependently-typed language, let-bindings are not just syntactic sugar for (\x. body) val
   Let(String, Term, Term)
   Ann(Term, Term)
 }

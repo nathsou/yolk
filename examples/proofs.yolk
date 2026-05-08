@@ -393,3 +393,346 @@ theorem Nat.le_trans (a b c : Nat) : Le a b -> Le b c -> Le a c :=
   fun h1 h2 => match h2
     | refl => h1
     | step b' _ ih => Le.step a b' ih
+
+-- ===== Existentials and basic number theory =====
+
+inductive Exists (A : Type) (P : A -> Prop) : Prop
+  | intro : forall a : A, P a -> Exists A P
+
+def Nat.fact (n : Nat) : Nat :=
+  match n
+    | zero => 1
+    | succ n' ih => (n' + 1) * ih
+
+def Divides (d n : Nat) : Prop := Exists Nat (fun k => Eq Nat n (d * k))
+
+def Composite (n : Nat) : Prop :=
+  Exists Nat (fun a =>
+    Exists Nat (fun b =>
+      And (Lt 1 a) (And (Lt 1 b) (Eq Nat n (a * b)))))
+
+def Prime (n : Nat) : Prop := And (Lt 1 n) (Not (Composite n))
+
+-- ===== More Nat order lemmas =====
+
+theorem Nat.add_one (n : Nat) : Eq Nat (n + 1) (Nat.succ n) :=
+  let h1 : Eq Nat (n + 1) (Nat.succ (n + 0)) := Nat.add_succ n 0 in
+  let h2 : Eq Nat (Nat.succ (n + 0)) (Nat.succ n) := congr_arg Nat Nat (n + 0) n Nat.succ (Nat.add_zero n) in
+  Eq.trans Nat (n + 1) (Nat.succ (n + 0)) (Nat.succ n) h1 h2
+
+theorem Nat.one_add (n : Nat) : Eq Nat (1 + n) (Nat.succ n) :=
+  match n
+    | zero => Eq.refl Nat 1
+    | succ n' ih => congr_arg Nat Nat (1 + n') (Nat.succ n') Nat.succ ih
+
+theorem Nat.zero_le (n : Nat) : Le 0 n :=
+  match n
+    | zero => Le.refl 0
+    | succ n' ih => Le.step 0 n' ih
+
+theorem Nat.le_self_add (a b : Nat) : Le a (a + b) :=
+  match b
+    | zero =>
+        Eq.subst Nat a (a + 0) (Le a) (Eq.symm Nat (a + 0) a (Nat.add_zero a)) (Le.refl a)
+    | succ b' ih =>
+        Eq.subst Nat (Nat.succ (a + b')) (a + Nat.succ b') (Le a) (Nat.succ_add a b') (Le.step a (a + b') ih)
+
+theorem Nat.le_right_add (a b : Nat) : Le b (a + b) :=
+  Eq.subst Nat (b + a) (a + b) (Le b) (Eq.symm Nat (a + b) (b + a) (Nat.add_comm a b)) (Nat.le_self_add b a)
+
+theorem Nat.zero_lt_one : Lt 0 1 := Le.refl 1
+
+theorem Nat.zero_lt_succ (n : Nat) : Lt 0 (Nat.succ n) :=
+  match n
+    | zero => Le.refl 1
+    | succ n' ih => Le.step 1 (Nat.succ n') ih
+
+theorem Nat.lt_of_lt_of_le (a b c : Nat) (h1 : Lt a b) (h2 : Le b c) : Lt a c :=
+  Nat.le_trans (Nat.succ a) b c h1 h2
+
+theorem Nat.lt_of_le_of_lt (a b c : Nat) (h1 : Le a b) (h2 : Lt b c) : Lt a c :=
+  Nat.le_trans (Nat.succ a) (Nat.succ b) c (Nat.succ_le_succ a b h1) h2
+
+theorem Nat.exists_add_of_le (a b : Nat) : Le a b -> Exists Nat (fun k => Eq Nat b (a + k)) :=
+  fun h =>
+    match h
+      | refl =>
+          Exists.intro Nat (fun k => Eq Nat a (a + k)) 0 (Eq.symm Nat (a + 0) a (Nat.add_zero a))
+      | step b' h' ih =>
+          match ih
+            | intro k hk =>
+                let h1 : Eq Nat (Nat.succ b') (Nat.succ (a + k)) := congr_arg Nat Nat b' (a + k) Nat.succ hk in
+                let h2 : Eq Nat (Nat.succ b') (a + Nat.succ k) := Eq.trans Nat (Nat.succ b') (Nat.succ (a + k)) (a + Nat.succ k) h1 (Nat.succ_add a k) in
+                Exists.intro Nat (fun m => Eq Nat (Nat.succ b') (a + m)) (Nat.succ k) h2
+
+theorem Nat.succ_add_right (a b : Nat) : Eq Nat (Nat.succ a + b) (a + Nat.succ b) :=
+  let h1 : Eq Nat (Nat.succ a + b) (Nat.succ (a + b)) := Eq.symm Nat (Nat.succ (a + b)) (Nat.succ a + b) (Nat.succ_add_comm a b) in
+  let h2 : Eq Nat (Nat.succ (a + b)) (a + Nat.succ b) := Nat.succ_add a b in
+  Eq.trans Nat (Nat.succ a + b) (Nat.succ (a + b)) (a + Nat.succ b) h1 h2
+
+theorem Nat.le_of_succ_le_succ (a b : Nat) : Le (Nat.succ a) (Nat.succ b) -> Le a b :=
+  fun h =>
+    match Nat.exists_add_of_le (Nat.succ a) (Nat.succ b) h
+      | intro k hk =>
+          let h1 : Eq Nat (Nat.succ a + k) (Nat.succ (a + k)) := Eq.symm Nat (Nat.succ (a + k)) (Nat.succ a + k) (Nat.succ_add_comm a k) in
+          let h2 : Eq Nat (Nat.succ b) (Nat.succ (a + k)) := Eq.trans Nat (Nat.succ b) (Nat.succ a + k) (Nat.succ (a + k)) hk h1 in
+          let h3 : Eq Nat b (a + k) := Nat.succ_inj_eq b (a + k) h2 in
+          Eq.subst Nat (a + k) b (Le a) (Eq.symm Nat b (a + k) h3) (Nat.le_self_add a k)
+
+theorem Nat.not_succ_le_self (n : Nat) : Not (Le (Nat.succ n) n) :=
+  match n
+    | zero => (
+        fun h =>
+          match Nat.exists_add_of_le 1 0 h
+            | intro k hk =>
+                let h1 : Eq Nat 0 (Nat.succ k) := Eq.trans Nat 0 (1 + k) (Nat.succ k) hk (Nat.one_add k) in
+                Nat.succ_neq_zero k (Eq.symm Nat 0 (Nat.succ k) h1)
+      )
+    | succ n' ih => fun h => ih (Nat.le_of_succ_le_succ (Nat.succ n') n' h)
+
+theorem Nat.zero_lt_of_one_lt (n : Nat) (h : Lt 1 n) : Lt 0 n :=
+  let h1 : Le 1 2 := Le.step 1 1 (Le.refl 1) in
+  Nat.le_trans 1 2 n h1 h
+
+theorem Nat.lt_add_of_pos_right (a b : Nat) : Lt 0 b -> Lt a (a + b) :=
+  fun h =>
+    match Nat.exists_add_of_le 1 b h
+      | intro k hk =>
+          let h1 : Eq Nat (a + b) (a + (1 + k)) := Eq.subst Nat b (1 + k) (fun x => Eq Nat (a + b) (a + x)) hk (Eq.refl Nat (a + b)) in
+          let h2 : Eq Nat (a + (1 + k)) (a + k + 1) := Nat.add_right_comm a 1 k in
+          let h3 : Eq Nat (a + k + 1) (Nat.succ (a + k)) := Nat.add_one (a + k) in
+          let h4 : Eq Nat (a + b) (a + k + 1) := Eq.trans Nat (a + b) (a + (1 + k)) (a + k + 1) h1 h2 in
+          let h5 : Eq Nat (a + b) (Nat.succ (a + k)) := Eq.trans Nat (a + b) (a + k + 1) (Nat.succ (a + k)) h4 h3 in
+          let h6 : Lt a (Nat.succ (a + k)) := Nat.succ_le_succ a (a + k) (Nat.le_self_add a k) in
+          Eq.subst Nat (Nat.succ (a + k)) (a + b) (Lt a) (Eq.symm Nat (a + b) (Nat.succ (a + k)) h5) h6
+
+theorem Nat.neq_of_lt (a b : Nat) (h : Lt a b) : Neq Nat a b :=
+  fun hab =>
+    let h1 : Le (Nat.succ a) a := Eq.subst Nat b a (Le (Nat.succ a)) (Eq.symm Nat a b hab) h in
+    Nat.not_succ_le_self a h1
+
+theorem Nat.not_eq_self_add_pos (a k : Nat) (hk : Lt 0 k) : Not (Eq Nat a (a + k)) :=
+  Nat.neq_of_lt a (a + k) (Nat.lt_add_of_pos_right a k hk)
+
+theorem Nat.zero_lt_of_neq_zero (n : Nat) (h : Neq Nat n 0) : Lt 0 n :=
+  (match n return (fun n' : Nat => Neq Nat n' 0 -> Lt 0 n')
+    | zero => fun h0 => absurd (Lt 0 0) (h0 (Eq.refl Nat 0))
+    | succ n' ih => fun h0 : Neq Nat (Nat.succ n') 0 => Nat.zero_lt_succ n'
+  ) h
+
+theorem Nat.lt_of_le_of_neq (a b : Nat) (h : Le a b) (hab : Neq Nat a b) : Lt a b :=
+  match Nat.exists_add_of_le a b h
+    | intro k hk =>
+        match Classical.em (Eq Nat k 0)
+          | inl hk0 =>
+              let h1 : Eq Nat b (a + 0) := Eq.subst Nat k 0 (fun x => Eq Nat b (a + x)) hk0 hk in
+              let h2 : Eq Nat b a := Eq.trans Nat b (a + 0) a h1 (Nat.add_zero a) in
+              absurd (Lt a b) (hab (Eq.symm Nat b a h2))
+          | inr hk0 =>
+              let h1 : Lt 0 k := Nat.zero_lt_of_neq_zero k hk0 in
+              let h2 : Lt a (a + k) := Nat.lt_add_of_pos_right a k h1 in
+              Eq.subst Nat (a + k) b (Lt a) (Eq.symm Nat b (a + k) hk) h2
+
+theorem Nat.le_total (a : Nat) : forall b : Nat, Or (Le a b) (Le b a) :=
+  match a
+    | zero => fun b => Or.inl (Le 0 b) (Le b 0) (Nat.zero_le b)
+    | succ a' ih => fun b =>
+        match b
+          | zero => Or.inr (Le (Nat.succ a') 0) (Le 0 (Nat.succ a')) (Nat.zero_le (Nat.succ a'))
+          | succ b' _ =>
+              match ih b'
+                | inl hab => Or.inl (Le (Nat.succ a') (Nat.succ b')) (Le (Nat.succ b') (Nat.succ a')) (Nat.succ_le_succ a' b' hab)
+                | inr hba => Or.inr (Le (Nat.succ a') (Nat.succ b')) (Le (Nat.succ b') (Nat.succ a')) (Nat.succ_le_succ b' a' hba)
+
+-- ===== Divisibility =====
+
+theorem Divides.refl (n : Nat) : Divides n n :=
+  Exists.intro Nat (fun k => Eq Nat n (n * k)) 1 (Eq.symm Nat (n * 1) n (Nat.mul_one n))
+
+theorem Divides.mul_right (d n k : Nat) : Divides d n -> Divides d (n * k) :=
+  fun h =>
+    match h
+      | intro w hw =>
+          let h1 : Eq Nat (n * k) ((d * w) * k) := congr_arg Nat Nat n (d * w) (fun x : Nat => x * k) hw in
+          let h2 : Eq Nat ((d * w) * k) (d * (w * k)) := Nat.mul_assoc d w k in
+          Exists.intro Nat (fun m => Eq Nat (n * k) (d * m)) (w * k) (Eq.trans Nat (n * k) ((d * w) * k) (d * (w * k)) h1 h2)
+
+theorem Divides.mul_left (d n k : Nat) : Divides d n -> Divides d (k * n) :=
+  fun h =>
+    Eq.subst Nat (n * k) (k * n) (Divides d) (Nat.mul_comm n k) (Divides.mul_right d n k h)
+
+-- ===== More Nat arithmetic/positivity =====
+
+theorem Nat.zero_lt_mul (a : Nat) : forall b : Nat, Lt 0 a -> Lt 0 b -> Lt 0 (a * b) :=
+  fun b =>
+    match b
+      | zero => fun _ hb => absurd (Lt 0 (a * 0)) (Nat.not_succ_le_self 0 hb)
+      | succ b' _ => fun ha _ =>
+          let h1 : Eq Nat (a * Nat.succ b') (a * b' + a) := Nat.mul_succ a b' in
+          let h2 : Lt 0 (a * b' + a) := Nat.lt_of_lt_of_le 0 a (a * b' + a) ha (Nat.le_right_add (a * b') a) in
+          Eq.subst Nat (a * b' + a) (a * Nat.succ b') (Lt 0) (Eq.symm Nat (a * Nat.succ b') (a * b' + a) h1) h2
+
+theorem Nat.fact_pos (n : Nat) : Lt 0 (Nat.fact n) :=
+  match n
+    | zero => Le.refl 1
+    | succ n' ih => Nat.zero_lt_mul (Nat.succ n') (Nat.fact n') (Nat.zero_lt_succ n') ih
+
+theorem Nat.one_lt_add_one (a : Nat) (ha : Lt 0 a) : Lt 1 (a + 1) :=
+  let h1 : Lt 1 (1 + a) := Nat.lt_add_of_pos_right 1 a ha in
+  Eq.subst Nat (1 + a) (a + 1) (Lt 1) (Nat.add_comm 1 a) h1
+
+theorem Nat.one_lt_mul_of_one_lt_left_of_pos_right (d : Nat) : forall k : Nat, Lt 1 d -> Lt 0 k -> Lt 1 (d * k) :=
+  fun k =>
+    match k
+      | zero => fun _ hk => absurd (Lt 1 (d * 0)) (Nat.not_succ_le_self 0 hk)
+      | succ k' _ => fun hd _ =>
+          let h1 : Eq Nat (d * Nat.succ k') (d * k' + d) := Nat.mul_succ d k' in
+          let h2 : Le d (d * k' + d) := Nat.le_right_add (d * k') d in
+          let h3 : Lt 1 (d * k' + d) := Nat.lt_of_lt_of_le 1 d (d * k' + d) hd h2 in
+          Eq.subst Nat (d * k' + d) (d * Nat.succ k') (Lt 1) (Eq.symm Nat (d * Nat.succ k') (d * k' + d) h1) h3
+
+theorem Nat.lt_mul_of_one_lt_right (a b : Nat) (ha : Lt 0 a) (hb : Lt 1 b) : Lt a (a * b) :=
+  match hb
+    | refl =>
+        let h1 : Eq Nat (a * 2) (a + a) := Nat.mul_two a in
+        let h2 : Lt a (a + a) := Nat.lt_add_of_pos_right a a ha in
+        Eq.subst Nat (a + a) (a * 2) (Lt a) (Eq.symm Nat (a * 2) (a + a) h1) h2
+    | step b' h' ih =>
+        let h1 : Eq Nat (a * Nat.succ b') (a * b' + a) := Nat.mul_succ a b' in
+        let h2 : Le (a * b') (a * b' + a) := Nat.le_self_add (a * b') a in
+        let h3 : Lt a (a * b' + a) := Nat.lt_of_lt_of_le a (a * b') (a * b' + a) ih h2 in
+        Eq.subst Nat (a * b' + a) (a * Nat.succ b') (Lt a) (Eq.symm Nat (a * Nat.succ b') (a * b' + a) h1) h3
+
+theorem Nat.lt_of_factor_left (a b n : Nat) (ha : Lt 0 a) (hb : Lt 1 b) (h : Eq Nat n (a * b)) : Lt a n :=
+  Eq.subst Nat (a * b) n (Lt a) (Eq.symm Nat n (a * b) h) (Nat.lt_mul_of_one_lt_right a b ha hb)
+
+theorem Nat.prime_or_composite (n : Nat) (hn : Lt 1 n) : Or (Prime n) (Composite n) :=
+  match Classical.em (Composite n)
+    | inl hcomp => Or.inr (Prime n) (Composite n) hcomp
+    | inr hnot => Or.inl (Prime n) (Composite n) (And.intro (Lt 1 n) (Not (Composite n)) hn hnot)
+
+theorem Nat.fact_dvd_self (d : Nat) (hd : Lt 0 d) : Divides d (Nat.fact d) :=
+  (match d return (fun d' : Nat => Lt 0 d' -> Divides d' (Nat.fact d'))
+    | zero => fun hd0 => absurd (Divides 0 (Nat.fact 0)) (Nat.not_succ_le_self 0 hd0)
+    | succ d' ih =>
+        fun _ =>
+          let h1 : Eq Nat (Nat.fact (Nat.succ d')) ((Nat.succ d') * Nat.fact d') :=
+            congr_arg Nat Nat (d' + 1) (Nat.succ d') (fun x : Nat => x * Nat.fact d') (Nat.add_one d') in
+          Exists.intro Nat (fun k => Eq Nat (Nat.fact (Nat.succ d')) ((Nat.succ d') * k)) (Nat.fact d') h1
+  ) hd
+
+theorem Nat.fact_dvd_of_le (d n : Nat) (hd : Lt 0 d) : Le d n -> Divides d (Nat.fact n) :=
+  fun h =>
+    match h
+      | refl => Nat.fact_dvd_self d hd
+      | step n' h' ih =>
+          let h1 : Divides d (Nat.fact n' * (n' + 1)) := Divides.mul_right d (Nat.fact n') (n' + 1) ih in
+          let h2 : Eq Nat (Nat.fact (Nat.succ n')) ((n' + 1) * Nat.fact n') := Eq.refl Nat ((n' + 1) * Nat.fact n') in
+          let h3 : Eq Nat ((n' + 1) * Nat.fact n') (Nat.fact n' * (n' + 1)) := Nat.mul_comm (n' + 1) (Nat.fact n') in
+          let h4 : Eq Nat (Nat.fact (Nat.succ n')) (Nat.fact n' * (n' + 1)) := Eq.trans Nat (Nat.fact (Nat.succ n')) ((n' + 1) * Nat.fact n') (Nat.fact n' * (n' + 1)) h2 h3 in
+          Eq.subst Nat (Nat.fact n' * (n' + 1)) (Nat.fact (Nat.succ n')) (Divides d) (Eq.symm Nat (Nat.fact (Nat.succ n')) (Nat.fact n' * (n' + 1)) h4) h1
+
+theorem Nat.not_dvd_succ_of_dvd (d m : Nat) (hd : Lt 1 d) (hm : Divides d m) : Not (Divides d (m + 1)) :=
+  fun hm1 =>
+    match hm
+      | intro a hma =>
+          match hm1
+            | intro b hmb =>
+                match Nat.le_total a b
+                  | inl hab => (
+                      match Nat.exists_add_of_le a b hab
+                        | intro k hk =>
+                            let h1 : Eq Nat (m + 1) (d * (a + k)) := Eq.trans Nat (m + 1) (d * b) (d * (a + k)) hmb (congr_arg Nat Nat b (a + k) (fun x : Nat => d * x) hk) in
+                            let h2 : Eq Nat (d * (a + k)) (d * a + d * k) := Nat.mul_add d a k in
+                            let h3 : Eq Nat (d * a + d * k) (m + d * k) := congr_arg Nat Nat (d * a) m (fun x : Nat => x + d * k) (Eq.symm Nat m (d * a) hma) in
+                            let h12 : Eq Nat (m + 1) (d * a + d * k) := Eq.trans Nat (m + 1) (d * (a + k)) (d * a + d * k) h1 h2 in
+                            let h4 : Eq Nat (m + 1) (m + d * k) := Eq.trans Nat (m + 1) (d * a + d * k) (m + d * k) h12 h3 in
+                            let h5 : Eq Nat 1 (d * k) := Nat.add_left_cancel m 1 (d * k) h4 in
+                            match Classical.em (Eq Nat k 0)
+                              | inl hk0 =>
+                                  let h6 : Eq Nat (d * k) 0 := congr_arg Nat Nat k 0 (fun x : Nat => d * x) hk0 in
+                                  let h7 : Eq Nat 1 0 := Eq.trans Nat 1 (d * k) 0 h5 h6 in
+                                  Nat.succ_neq_zero 0 h7
+                              | inr hk0 =>
+                                  let hk1 : Lt 0 k := Nat.zero_lt_of_neq_zero k hk0 in
+                                  let h6 : Lt 1 (d * k) := Nat.one_lt_mul_of_one_lt_left_of_pos_right d k hd hk1 in
+                                  Nat.neq_of_lt 1 (d * k) h6 h5
+                    )
+                  | inr hba => (
+                      match Nat.exists_add_of_le b a hba
+                        | intro k hk =>
+                            let h1 : Eq Nat m (d * (b + k)) := Eq.trans Nat m (d * a) (d * (b + k)) hma (congr_arg Nat Nat a (b + k) (fun x : Nat => d * x) hk) in
+                            let h2 : Eq Nat (d * (b + k)) (d * b + d * k) := Nat.mul_add d b k in
+                            let h3 : Eq Nat (d * b + d * k) (m + 1 + d * k) := congr_arg Nat Nat (d * b) (m + 1) (fun x : Nat => x + d * k) (Eq.symm Nat (m + 1) (d * b) hmb) in
+                            let h12 : Eq Nat m (d * b + d * k) := Eq.trans Nat m (d * (b + k)) (d * b + d * k) h1 h2 in
+                            let h4 : Eq Nat m (m + 1 + d * k) := Eq.trans Nat m (d * b + d * k) (m + 1 + d * k) h12 h3 in
+                            let h5 : Eq Nat (m + 1 + d * k) (m + (1 + d * k)) := Nat.add_assoc m 1 (d * k) in
+                            let h6 : Eq Nat m (m + (1 + d * k)) := Eq.trans Nat m (m + 1 + d * k) (m + (1 + d * k)) h4 h5 in
+                            let h7 : Lt 0 (1 + d * k) := Eq.subst Nat (Nat.succ (d * k)) (1 + d * k) (Lt 0) (Eq.symm Nat (1 + d * k) (Nat.succ (d * k)) (Nat.one_add (d * k))) (Nat.zero_lt_succ (d * k)) in
+                            Nat.not_eq_self_add_pos m (1 + d * k) h7 h6
+                    )
+
+-- ===== Prime divisors and Euclid's argument =====
+
+theorem Nat.exists_prime_divisor_upto (n : Nat) : forall m : Nat, Le m n -> Lt 1 m -> Exists Nat (fun p => And (Prime p) (Divides p m)) :=
+  match n
+    | zero => fun m hm hm1 =>
+        let h20 : Le 2 0 := Nat.le_trans 2 m 0 hm1 hm in
+        let h21 : Le 2 1 := Nat.le_trans 2 0 1 h20 (Nat.zero_le 1) in
+        absurd (Exists Nat (fun p => And (Prime p) (Divides p m))) (Nat.not_succ_le_self 1 h21)
+    | succ n' ih => fun m hm hm1 =>
+        match Nat.prime_or_composite m hm1
+          | inl hprime =>
+              Exists.intro Nat (fun p => And (Prime p) (Divides p m)) m (And.intro (Prime m) (Divides m m) hprime (Divides.refl m))
+          | inr hcomp => (
+              match hcomp
+                | intro a ha => (
+                    match ha
+                      | intro b hab =>
+                          let rec_step : Lt 1 a -> Lt 1 b -> Eq Nat m (a * b) -> Le a n' -> Exists Nat (fun q => And (Prime q) (Divides q m)) :=
+                            fun h1a h1b heq hle_an =>
+                              match ih a hle_an h1a
+                                | intro p hp =>
+                                    let hpprime : Prime p := And.elim_left (Prime p) (Divides p a) hp in
+                                    let hpdiva : Divides p a := And.elim_right (Prime p) (Divides p a) hp in
+                                    let hpdivab : Divides p (a * b) := Divides.mul_right p a b hpdiva in
+                                    let hpdivm : Divides p m := Eq.subst Nat (a * b) m (Divides p) (Eq.symm Nat m (a * b) heq) hpdivab in
+                                    Exists.intro Nat (fun q => And (Prime q) (Divides q m)) p (And.intro (Prime p) (Divides p m) hpprime hpdivm) in
+                          let h1a : Lt 1 a := And.elim_left (Lt 1 a) (And (Lt 1 b) (Eq Nat m (a * b))) hab in
+                          let hrest : And (Lt 1 b) (Eq Nat m (a * b)) := And.elim_right (Lt 1 a) (And (Lt 1 b) (Eq Nat m (a * b))) hab in
+                          let h1b : Lt 1 b := And.elim_left (Lt 1 b) (Eq Nat m (a * b)) hrest in
+                          let heq : Eq Nat m (a * b) := And.elim_right (Lt 1 b) (Eq Nat m (a * b)) hrest in
+                          let hlt_am : Lt a m := Nat.lt_of_factor_left a b m (Nat.zero_lt_of_one_lt a h1a) h1b heq in
+                          let hlt_asn : Lt a (Nat.succ n') := Nat.lt_of_lt_of_le a m (Nat.succ n') hlt_am hm in
+                          let hle_an : Le a n' := Nat.le_of_succ_le_succ a n' hlt_asn in
+                          rec_step h1a h1b heq hle_an
+                  )
+            )
+
+theorem Nat.exists_prime_divisor (n : Nat) (hn : Lt 1 n) : Exists Nat (fun p => And (Prime p) (Divides p n)) :=
+  Nat.exists_prime_divisor_upto n n (Le.refl n) hn
+
+def EuclidWitness (n : Nat) : Nat := Nat.fact n + 1
+
+theorem Nat.euclid_witness_gt_one (n : Nat) : Lt 1 (EuclidWitness n) :=
+  Nat.one_lt_add_one (Nat.fact n) (Nat.fact_pos n)
+
+theorem Nat.prime_dvd_euclid_witness_gt (n p : Nat) (hp : Prime p) (hdiv : Divides p (EuclidWitness n)) : Lt n p :=
+  let hp1 : Lt 1 p := And.elim_left (Lt 1 p) (Not (Composite p)) hp in
+  let hp0 : Lt 0 p := Nat.zero_lt_of_one_lt p hp1 in
+  let hnot : Not (Le p n) := fun hpn => Nat.not_dvd_succ_of_dvd p (Nat.fact n) hp1 (Nat.fact_dvd_of_le p n hp0 hpn) hdiv in
+  match Nat.le_total p n
+    | inl hpn => absurd (Lt n p) (hnot hpn)
+    | inr hnp =>
+        let hpneq : Neq Nat n p := fun hnpq =>
+          let hpn : Le p n := Eq.subst Nat n p (fun x => Le x n) hnpq (Le.refl n) in
+          hnot hpn in
+        Nat.lt_of_le_of_neq n p hnp hpneq
+
+theorem Nat.exists_prime_gt (n : Nat) : Exists Nat (fun p => And (Prime p) (Lt n p)) :=
+  match Nat.exists_prime_divisor (EuclidWitness n) (Nat.euclid_witness_gt_one n)
+    | intro p hp =>
+        let hpprime : Prime p := And.elim_left (Prime p) (Divides p (EuclidWitness n)) hp in
+        let hpdiv : Divides p (EuclidWitness n) := And.elim_right (Prime p) (Divides p (EuclidWitness n)) hp in
+        let hgt : Lt n p := Nat.prime_dvd_euclid_witness_gt n p hpprime hpdiv in
+        Exists.intro Nat (fun q => And (Prime q) (Lt n q)) p (And.intro (Prime p) (Lt n p) hpprime hgt)
