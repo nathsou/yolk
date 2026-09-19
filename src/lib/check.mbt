@@ -393,7 +393,13 @@ fn Context::check_decl(self: Context, name: Name, uvs: Array[UniverseVar], decl:
 
 // Given a term and an inductive name + param FreeVars, check if the term is
 // an application of `I param_fvars... indices...`. If so, return Some(indices).
-fn is_ind_app(term: Term, ind_name: Name, ind_levels: Array[Level], param_vars: Array[OpenedBinder]) -> ArrayView[Term]? {
+fn Context::is_ind_app(
+  self: Context,
+  term: Term,
+  ind_name: Name,
+  ind_levels: Array[Level],
+  param_vars: Array[OpenedBinder],
+) -> ArrayView[Term]? raise TypeCheckError {
   let (head, args) = term.collect_app_args()
   let n_params = param_vars.length()
 
@@ -406,7 +412,7 @@ fn is_ind_app(term: Term, ind_name: Name, ind_levels: Array[Level], param_vars: 
       // Check that the first n_params args match the param FreeVars
       for i in 0..<n_params {
         let { name, fvar, .. } = param_vars[i]
-        if !args[i].is_alpha_eq(FreeVar(name, fvar)) {
+        if !self.is_def_eq(args[i], FreeVar(name, fvar)) {
           return None
         }
       }
@@ -577,7 +583,7 @@ fn Context::generate_recursor(self: Context, ind_name: Name, uvs: Array[Universe
 
     // ctor_remaining is now the return type: I params... i1 ... im
     // Extract the constructor's specific indices
-    let ctor_indices = match is_ind_app(ctor_remaining, ind_name, ind_levels, param_vars) {
+    let ctor_indices = match self.is_ind_app(ctor_remaining, ind_name, ind_levels, param_vars) {
       Some(idxs) => idxs
       None => raise TypeError(ctor_ty, "Constructor '\{ctor_name}' return type is not a valid application of '\{ind_name}'")
     }
@@ -604,7 +610,7 @@ fn Context::generate_recursor(self: Context, ind_name: Name, uvs: Array[Universe
     let rec_field_indices: Array[Int] = []
     for i, a in ctor_arg_vars {
       let (field_binders, field_result) = self.open_telescope(a.ty, minor_cleanup)
-      if is_ind_app(field_result, ind_name, ind_levels, param_vars) is Some(rec_indices) {
+      if self.is_ind_app(field_result, ind_name, ind_levels, param_vars) is Some(rec_indices) {
         rec_field_indices.push(i)
         let field_app = mk_app(FreeVar(a.name, a.fvar), field_binders.iter().map(b => FreeVar(b.name, b.fvar)))
         let mut ih_ty = Term::App(mk_app(motive_fvar, rec_indices.iter()), field_app)
@@ -728,7 +734,7 @@ fn Context::check_recursor_rules(
       )
     }
     let (fields, result) = self.open_telescope(ctor_ty, cleanup)
-    let indices = match is_ind_app(result, ind_name, ind_levels, params) {
+    let indices = match self.is_ind_app(result, ind_name, ind_levels, params) {
       Some(indices) => indices
       None =>
         raise TypeError(result, "Invalid constructor result in recursor rule")
@@ -765,7 +771,7 @@ fn Context::is_strictly_positive(
       self.is_strictly_positive(body, inductive_type_name, param_vars~, ind_levels~)
     }
     Const(_) | App(_) => {
-      match is_ind_app(ty, inductive_type_name, ind_levels, param_vars) {
+      match self.is_ind_app(ty, inductive_type_name, ind_levels, param_vars) {
         Some(indices) => !indices.iter().any(arg => const_occurs_in(inductive_type_name, arg))
         None => false
       }
@@ -832,7 +838,7 @@ fn Context::is_valid_inductive_app(
   param_vars: Array[OpenedBinder],
   opened_arity: Term,
 ) -> Bool raise TypeCheckError {
-  let indices = match is_ind_app(self.whnf(term), inductive_name, ind_levels, param_vars) {
+  let indices = match self.is_ind_app(self.whnf(term), inductive_name, ind_levels, param_vars) {
     Some(indices) => indices
     None => return false
   }
@@ -1321,15 +1327,19 @@ fn Context::is_def_eq(self: Context, t1: Term, t2: Term) -> Bool raise TypeCheck
       {
         let ty1 = self.infer(w1)
         let s1 = self.whnf(self.infer(ty1))
-        if !(s1 is Sort(Zero)) {
-          return false
+        let l1 = match s1 {
+          Sort(level) => level
+          _ => return false
         }
+        if !(l1 == Zero) { return false }
         
         let ty2 = self.infer(w2)
         let s2 = self.whnf(self.infer(ty2))
-        if !(s2 is Sort(Zero)) {
-          return false
+        let l2 = match s2 {
+          Sort(level) => level
+          _ => return false
         }
+        if !(l2 == Zero) { return false }
 
         self.is_def_eq(ty1, ty2)
       }

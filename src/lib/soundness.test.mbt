@@ -346,3 +346,46 @@ test "matches preserve qualified inductive names" {
     ["7", "2"],
   )
 }
+
+///|
+test "proof irrelevance uses semantic universe equality" {
+  assert_ok(
+    #|theorem f : True -> True := fun x => x
+    #|theorem g : True -> True := fun _ => True.intro
+    #|inductive EqP (P : Prop) (p : P) : P -> Prop
+    #|  | refl : EqP P p p
+    #|theorem same : EqP (True -> True) f g := EqP.refl (True -> True) f
+    ,
+  )
+}
+
+///|
+test "explicit match motives infer their elimination universe" {
+  assert_program_output(
+    (
+      #|#eval match true return Nat | true => 1 | false => 0
+      #|#eval match Option.some.{0} Nat 4 return Nat
+      #|  | none => 0
+      #|  | some n => n
+      #|#check match true return fun b => Eq Bool b b
+      #|  | true => Eq.refl Bool true
+      #|  | false => Eq.refl Bool false
+    ),
+    ["1", "4", "(fun b: Bool => b = b) true"],
+  )
+}
+
+///|
+test "uniform inductive parameters use definitional equality" {
+  assert_program_output(
+    (
+      #|def Id (A : Type) : Type := A
+      #|inductive Wrapped (A : Type) : Type
+      #|  | mk : A -> Wrapped (Id A)
+      #|def unwrap (A : Type) (value : Wrapped A) : A :=
+      #|  match value | mk a => a
+      #|#eval unwrap Bool (Wrapped.mk Bool true)
+    ),
+    ["true"],
+  )
+}

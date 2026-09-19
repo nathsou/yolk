@@ -321,6 +321,45 @@ fn append_anon_binders(sterm: STerm, n: Int) -> STerm {
   }
 }
 
+// Elaborate a motive while inferring its result universe. The recursor already
+// determines the motive's argument telescope, so use those domains to elaborate
+// unannotated lambdas and infer only the final body.
+fn Elaborator::elaborate_motive_infer(
+  self: Elaborator,
+  sterm: STerm,
+  motive_shape: Term,
+) -> Term raise {
+  match motive_shape {
+    Pi(binder, domain, codomain) => match sterm {
+      Fun(name, annotation, body) => {
+        if annotation is Some(annotation) {
+          let annotation = self.elaborate_term(annotation)
+          if !self.ctx.is_def_eq(annotation, domain) {
+            raise ElaborationError::Message(
+              "Motive argument '\{name}' has type '\{annotation}', expected '\{domain}'",
+            )
+          }
+        }
+
+        let fresh = self.ctx.declare_fresh(domain)
+        defer self.ctx.free_vars.remove(fresh)
+        let opened_codomain = instantiate_pi(binder, codomain, FreeVar(name, fresh))
+        self.bound_vars.push(name)
+        let bv_idx = self.bound_vars.length() - 1
+        self.open_vars.push((bv_idx, fresh))
+        defer {
+          let _ = self.bound_vars.unsafe_pop()
+          let _ = self.open_vars.unsafe_pop()
+        }
+        let body = self.elaborate_motive_infer(body, opened_codomain)
+        Lam(name, domain, close(body, fresh, 0))
+      }
+      _ => raise ElaborationError::Message("Motive has too few arguments")
+    }
+    _ => self.elaborate_term(sterm)
+  }
+}
+
 // Build a dependent motive by abstracting `terms` from `ret_ty`
 // `terms` contains index terms followed by the scrutinee, matching the Pi binders of motive_ty.
 // e.g. for Nat with scrutinee n and ret_ty = Eq Nat (Nat.add 0 n) n:
@@ -420,7 +459,10 @@ fn Elaborator::elaborate_match(
           Some(m) => m
           None => raise ElaborationError::Message("Match without expected type requires a return type annotation (use 'return <type>')")
         }
-        let mut abstract_partial = rec_ty
+        // Substitute the inductive's concrete universes before using the
+        // motive telescope. The final recursor universe remains symbolic until
+        // the motive body below determines it.
+        let mut abstract_partial = rec_ty.subst_levels((uvs, ind_levels))
         for i in 0..<num_ind_params {
           match abstract_partial {
             Pi(Some(_), _, body) => { abstract_partial = instantiate(body, 0, scrutinee_ty_params[i]) }
@@ -440,7 +482,7 @@ fn Elaborator::elaborate_match(
           m_sterm
         }
         
-        let motive_pre_elab = self.elaborate_term(wrapped)
+        let motive_pre_elab = self.elaborate_motive_infer(wrapped, abstract_motive_ty)
         let motive_ty_inferred = self.ctx.infer(motive_pre_elab)
         let types = motive_ty_inferred.collect_pi_types()
         
