@@ -100,27 +100,15 @@ pub fn Elaborator::elaborate_decl(self: Elaborator, name: Name, uvs: Array[Unive
       let params_elab: Array[(String, Term)] = []
       
       for param in params {
-        self.bound_vars.push(param.0)
         params_elab.push((param.0, self.elaborate_term(param.1)))
+        self.bound_vars.push(param.0)
       }
 
       let constructors_elab = constructors.map(ctor => (ctor.0, self.elaborate_term(ctor.1)))
+      self.bound_vars.truncate(original_bound_vars_len)
       let ty_elab = self.elaborate_term(ty)
       let ind_elab: InductiveDecl[Term] = { params: params_elab, constructors: constructors_elab, ty: ty_elab }
       self.ctx.add_decl(name, uvs, Inductive(ind_elab))
-
-      for ctor in constructors {
-        let mut ctor_ty = ctor.1
-        
-        for arg in params.rev_iter() {
-          ctor_ty = Pi(Some(arg.0), Some(arg.1), ctor_ty)
-        }
-
-        let ctor_ty_elab = self.elaborate_term(ctor_ty)
-        self.ctx.add_decl(Path(name, ctor.0), uvs, Constructor(ind=ind_elab, ty=ctor_ty_elab))
-      }
-
-      self.ctx.generate_recursor(name, uvs, ind_elab)
     }
     Constructor(_) => raise ElaborationError::Message("Constructors must be declared as part of an inductive type")
     Recursor(..) => raise ElaborationError::Message("Recursors are auto-generated and cannot be declared manually")
@@ -201,7 +189,7 @@ pub fn Elaborator::elaborate_term(self: Elaborator, term: STerm) -> Term raise {
     Let(x, ann, val, body) => {
       let val_elab = if ann is Some(ty) {
         let ty_elab = self.elaborate_term(ty)
-        self.elaborate_term_check(val, ty_elab)
+        Term::Ann(self.elaborate_term_check(val, ty_elab), ty_elab)
       } else {
         self.elaborate_term(val)
       }
@@ -226,10 +214,10 @@ pub fn Elaborator::elaborate_term_check(self: Elaborator, sterm: STerm, expected
   match sterm {
     Fun(x, None, body) => {
       match self.ctx.whnf(expected_ty) {
-        Pi(_, domain, codomain) => {
+        Pi(binder, domain, codomain) => {
           let fresh = self.ctx.declare_fresh(domain)
           defer self.ctx.free_vars.remove(fresh)
-          let opened_codomain = instantiate(codomain, 0, FreeVar(x, fresh))
+          let opened_codomain = instantiate_pi(binder, codomain, FreeVar(x, fresh))
           self.bound_vars.push(x)
           let bv_idx = self.bound_vars.length() - 1
           self.open_vars.push((bv_idx, fresh))
@@ -245,11 +233,11 @@ pub fn Elaborator::elaborate_term_check(self: Elaborator, sterm: STerm, expected
     }
     Fun(x, Some(ty_s), body) => {
       match self.ctx.whnf(expected_ty) {
-        Pi(_, _domain, codomain) => {
+        Pi(binder, _domain, codomain) => {
           let ty_elab = self.elaborate_term(ty_s)
           let fresh = self.ctx.declare_fresh(ty_elab)
           defer self.ctx.free_vars.remove(fresh)
-          let opened_codomain = instantiate(codomain, 0, FreeVar(x, fresh))
+          let opened_codomain = instantiate_pi(binder, codomain, FreeVar(x, fresh))
           self.bound_vars.push(x)
           let bv_idx = self.bound_vars.length() - 1
           self.open_vars.push((bv_idx, fresh))
@@ -284,7 +272,7 @@ pub fn Elaborator::elaborate_term_check(self: Elaborator, sterm: STerm, expected
     Let(x, ann, val, body) => {
       let val_elab = if ann is Some(ty) {
         let ty_elab = self.elaborate_term(ty)
-        self.elaborate_term_check(val, ty_elab)
+        Term::Ann(self.elaborate_term_check(val, ty_elab), ty_elab)
       } else {
         self.elaborate_term(val)
       }

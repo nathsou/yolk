@@ -873,7 +873,7 @@ test "parser" {
     let tokens = Lexer::new(input).tokenise()
 
     try Parser::new(tokens).parse_term() catch {
-      err => assert_eq(err, expected_err)
+      err => assert_true(err == expected_err, msg="Expected \{expected_err}, got \{err}")
     } noraise {
       expr => fail("Expected error '\{expected_err}', got '\{expr}'")
     }
@@ -921,7 +921,7 @@ test "parser" {
   expect_term("fun x => x", Fun("x", None, v("x")))
   expect_term("fun x => fun y => x", Fun("x", None, Fun("y", None, v("x"))))
   expect_term("forall x, x", Pi(Some("x"), None, v("x")))
-  expect_term_err("fun => x", Message("Expected variable, got 'ThickArrow'"))
+  expect_term_err("fun => x", Message("Expected variable, got '=>'"))
   
   expect_top_level(
     "def id : forall A: Type, A := fun A: Type => fun x: A => x",

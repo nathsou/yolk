@@ -313,13 +313,14 @@ test "declarations" {
     #|  | succ : MyNat -> Nat
   ))
 
-  // no beta reduction is performed in constructor parameters
+  // Reduction must expose negative occurrences in constructor parameters
   assert_not_ok((
     #|inductive Test : Type
     #|  | mk : (fun T : Type => (T -> T) -> T) Test
   ))
 
-  assert_not_ok((
+  // A reducible, strictly positive constructor telescope is valid.
+  assert_ok((
     #|inductive Test : Type
     #|  | mk : (fun T : Type => T -> T) Test
   ))
@@ -580,25 +581,25 @@ test "iota reduction" {
   assert_nf("(\{nat_add}) (\{two}) (\{three})", five)
 
   assert_nf(
-    "List.rec.{0, 1} Bool (fun _ : List Bool => Nat) Nat.zero (fun (h : Bool) (tl : List Bool) (ih : Nat) => Nat.succ ih) (List.nil Bool)",
+    "List.rec.{0, 1} Bool (fun _ : List.{0} Bool => Nat) Nat.zero (fun (h : Bool) (tl : List.{0} Bool) (ih : Nat) => Nat.succ ih) (List.nil.{0} Bool)",
     "Nat.zero"
   )
 
   // len [true, false] = 2
   assert_nf(
-    "List.rec.{0, 1} Bool (fun _ : List Bool => Nat) Nat.zero (fun (h : Bool) (tl : List Bool) (ih : Nat) => Nat.succ ih) (List.cons Bool true (List.cons Bool false (List.nil Bool)))",
+    "List.rec.{0, 1} Bool (fun _ : List.{0} Bool => Nat) Nat.zero (fun (h : Bool) (tl : List.{0} Bool) (ih : Nat) => Nat.succ ih) (List.cons.{0} Bool true (List.cons.{0} Bool false (List.nil.{0} Bool)))",
     "Nat.succ (Nat.succ Nat.zero)"
   )
 
   // Pair.fst (Pair.mk true zero) => true
   assert_nf(
-    "Pair.rec.{1} Bool Nat (fun _ : Pair Bool Nat => Bool) (fun (a : Bool) (b : Nat) => a) (Pair.mk Bool Nat true Nat.zero)",
+    "Pair.rec.{0, 0, 1} Bool Nat (fun _ : Pair.{0, 0} Bool Nat => Bool) (fun (a : Bool) (b : Nat) => a) (Pair.mk.{0, 0} Bool Nat true Nat.zero)",
     "true"
   )
 
   // Pair.snd (Pair.mk true zero) => zero
   assert_nf(
-    "Pair.rec.{1} Bool Nat (fun _ : Pair Bool Nat => Nat) (fun (a : Bool) (b : Nat) => b) (Pair.mk Bool Nat true Nat.zero)",
+    "Pair.rec.{0, 0, 1} Bool Nat (fun _ : Pair.{0, 0} Bool Nat => Nat) (fun (a : Bool) (b : Nat) => b) (Pair.mk.{0, 0} Bool Nat true Nat.zero)",
     "Nat.zero"
   )
 

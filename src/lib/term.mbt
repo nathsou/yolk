@@ -22,7 +22,7 @@ pub enum Level {
   Max(Level, Level)
   IMax(Level, Level)
   Param(UniverseVar)
-}
+} derive(Debug)
 
 pub type UniverseVar = String
 
@@ -118,43 +118,56 @@ pub fn Level::simplify(u: Level) -> Level {
   }
 }
 
-// TODO: implement https://lmf.cnrs.fr/downloads/Perso/long.pdf
-// u <= v + n, see https://github.com/digama0/lean-type-theory section 2.2
+// Decide u <= v + n for every assignment of natural numbers to parameters.
+// Split each parameter once into zero or successor. In each case imax reduces
+// to max, and levels are maxima of constants and independent variables + offsets.
+// This finite procedure is exponential in the number of distinct parameters.
 pub fn Level::leq(u: Level, v: Level, n: Int) -> Bool {
-  match (u, v) {
-    (Zero, _) if n >= 0 => true
-    (l1, l2) if n >= 0 && l1.structural_eq(l2) => true
-    (IMax(_, Zero), l) => Zero.leq(l, n)
-    (IMax(l1, Succ(l2)), l) => Max(l1, Succ(l2)).leq(l, n)
-    (IMax(l1, IMax(l2, l3)), l) => Max(IMax(l1, l2), IMax(l2, l3)).leq(l, n)
-    (l, IMax(l1, IMax(l2, l3))) => l.leq(Max(IMax(l1, l3), IMax(l2, l3)), n)
-    (IMax(l1, Max(l2, l3)), l) => Max(IMax(l1, l2), IMax(l1, l3)).leq(l, n)
-    (l, IMax(l1, Max(l2, l3))) => l.leq(Max(IMax(l1, l2), IMax(l1, l3)), n)
-    (Succ(l1), l2) => l1.leq(l2, n - 1)
-    (l1, Succ(l2)) => l1.leq(l2, n + 1)
-    (Max(l1, l2), l) => l1.leq(l, n) && l2.leq(l, n)
-    (l, Max(l1, l2)) => l.leq(l1, n) || l.leq(l2, n)
-    (l1, l2) => {
-      // if for all free variable v in l1 and l2,
-      // substituting them with Zero and Succ(v) preserves the leq relation, then l1 <= l2
-      let fvs = l1.free_vars().union(l2.free_vars())
+  if n >= 0 && (u is Zero || u.structural_eq(v)) {
+    return true
+  }
+  let vars = u.free_vars().union(v.free_vars()).iter().to_array()
+  let positive: Set[String] = @set.new()
 
-      if fvs.is_empty() {
-        // No free variables — all structural cases above were exhausted
-        return false
+  fn cases(i: Int) -> Bool {
+    if i == vars.length() {
+      let lhs = u.level_atoms(positive)
+      let rhs = v.level_atoms(positive)
+      return lhs.iter().all(a => rhs.iter().any(b =>
+        (a.0 is None || a.0 == b.0) && a.1 <= b.1 + n
+      ))
+    }
+    if !cases(i + 1) { return false }
+    positive.add(vars[i])
+    let result = cases(i + 1)
+    positive.remove(vars[i])
+    result
+  }
+
+  cases(0)
+}
+
+// Some(p), k denotes the residual nonnegative variable p plus k. A positive
+// original parameter is represented by p + 1; None denotes the constant zero.
+fn Level::level_atoms(self: Level, positive: Set[String]) -> Array[(String?, Int)] {
+  match self {
+    Zero => [(None, 0)]
+    Param(p) => if positive.contains(p) { [(Some(p), 1)] } else { [(None, 0)] }
+    Succ(l) => l.level_atoms(positive).map(a => (a.0, a.1 + 1))
+    Max(a, b) => {
+      let atoms = a.level_atoms(positive)
+      atoms.append(b.level_atoms(positive))
+      atoms
+    }
+    IMax(a, b) => {
+      let rhs = b.level_atoms(positive)
+      if rhs.iter().any(atom => atom.1 > 0) {
+        let atoms = a.level_atoms(positive)
+        atoms.append(rhs)
+        atoms
+      } else {
+        [(None, 0)]
       }
-
-      for fv in fvs {
-        if !(l1.subst(fv, Zero).leq(l2.subst(fv, Zero), n)) {
-          return false
-        }
-
-        if !(l1.subst(fv, Succ(Param(fv))).leq(l2.subst(fv, Succ(Param(fv))), n)) {
-          return false
-        }
-      }
-
-      true
     }
   }
 }
@@ -218,7 +231,9 @@ pub fn Term::is_alpha_eq(self: Term, other: Term) -> Bool {
     (FreeVar(_, id1), FreeVar(_, id2)) => id1 == id2
     (App(f, x), App(g, y)) => x.is_alpha_eq(y) && f.is_alpha_eq(g)
     (Lam(_, t1, body1), Lam(_, t2, body2)) => t1.is_alpha_eq(t2) && body1.is_alpha_eq(body2)
-    (Pi(_, a1, b1), Pi(_, a2, b2)) => a1.is_alpha_eq(a2) && b1.is_alpha_eq(b2)
+    // None is a nonbinding arrow in this representation, not an anonymous binder.
+    (Pi(x1, a1, b1), Pi(x2, a2, b2)) =>
+      (x1 is Some(_)) == (x2 is Some(_)) && a1.is_alpha_eq(a2) && b1.is_alpha_eq(b2)
     (Let(_, t1, body1), Let(_, t2, body2)) => t1.is_alpha_eq(t2) && body1.is_alpha_eq(body2)
     (Ann(lhs1, ty1), (Ann(lhs2, ty2))) => ty1.is_alpha_eq(ty2) && lhs1.is_alpha_eq(lhs2)
     _ => false
@@ -329,9 +344,8 @@ pub fn Term::collect_pi_types(self: Term) -> Array[Term] {
     ty = rest
   }
 
-  let sorted = types.rev()
-  sorted.push(ty)
-  sorted
+  types.push(ty)
+  types
 }
 
 pub fn Level::show_sort(self: Level, logger: &Logger) -> Unit {
@@ -608,4 +622,35 @@ test "Level::Show" {
   assert_eq(IMax(Param("u"), Param("v")).to_string(), "(imax u v)")
   assert_eq(Succ(Param("u")).to_string(), "(u + 1)")
   assert_eq(IMax(Max(Succ(Zero), Param("u")), Succ(Succ(Succ(Param("v"))))).to_string(), "(imax (max 1 u) (v + 3))")
+}
+
+// Global declarations may mention only their declared universe parameters and
+// locally bound term variables. Constructor bodies are checked after wrapping
+// them in their parameter telescope.
+fn Term::check_scope(self: Term, uvs: Array[UniverseVar], depth~: UInt = 0) -> Unit raise TypeCheckError {
+  fn check_level(l: Level) -> Unit raise TypeCheckError {
+    for u in l.free_vars() {
+      if !uvs.contains(u) {
+        raise TypeError(self, "Undeclared universe variable '\{u}'")
+      }
+    }
+  }
+  match self {
+    Sort(l) => check_level(l)
+    Const(_, levels) => for l in levels { check_level(l) }
+    FreeVar(_) => raise TypeError(self, "Free variable in global declaration")
+    BoundVar(i) => if i >= depth { raise TypeError(self, "Loose bound variable in global declaration") }
+    App(f, a) | Ann(f, a) => {
+      f.check_scope(uvs, depth~)
+      a.check_scope(uvs, depth~)
+    }
+    Lam(_, a, b) | Let(_, a, b) => {
+      a.check_scope(uvs, depth~)
+      b.check_scope(uvs, depth=depth + 1)
+    }
+    Pi(x, a, b) => {
+      a.check_scope(uvs, depth~)
+      b.check_scope(uvs, depth=if x is Some(_) { depth + 1 } else { depth })
+    }
+  }
 }
