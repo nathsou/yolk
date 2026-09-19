@@ -325,3 +325,24 @@ test "inductive arities may reduce to dependent products" {
     , ["9"],
   )
 }
+
+///|
+test "matches preserve qualified inductive names" {
+  assert_program_output(
+    (
+      #|inductive NS.T : Type
+      #|  | mk : NS.T
+      #|def NS.value (x : NS.T) : Nat := match x | mk => 7
+      #|#eval NS.value NS.T.mk
+      #|inductive NS.Tree : Type
+      #|  | leaf : NS.Tree
+      #|  | node : NS.Tree -> NS.Tree
+      #|def NS.depth (tree : NS.Tree) : Nat :=
+      #|  match tree
+      #|    | leaf => 0
+      #|    | node _ depth => Nat.succ depth
+      #|#eval NS.depth (NS.Tree.node (NS.Tree.node NS.Tree.leaf))
+    ),
+    ["7", "2"],
+  )
+}

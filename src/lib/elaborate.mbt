@@ -370,7 +370,7 @@ fn Elaborator::elaborate_match(
   let scrutinee_ty_whnf = self.ctx.whnf(scrutinee_ty)
   let (scrutinee_ty_head, scrutinee_ty_params) = scrutinee_ty_whnf.collect_app_args()
   let scrutinee_ty_name = match scrutinee_ty_head {
-    Const(name, _) => name.root()
+    Const(name, _) => name
     other => raise ElaborationError::Message("Expected scrutinee of 'match' to have an inductive type, got '\{other}'")
   }
 
@@ -380,7 +380,7 @@ fn Elaborator::elaborate_match(
     _ => []
   }
 
-  let (ind, uvs) = match self.ctx.env.decls.get(Leaf(scrutinee_ty_name)) {
+  let (ind, uvs) = match self.ctx.env.decls.get(scrutinee_ty_name) {
     Some({ decl: Inductive(ind), uvs }) => (ind, uvs)
     _ => raise ElaborationError::Message("Expected scrutinee of 'match' to have an inductive type, got '\{scrutinee_ty}'")
   }
@@ -391,7 +391,7 @@ fn Elaborator::elaborate_match(
     raise ElaborationError::Message("Number of match cases (\{cases.length()}) does not match number of constructors for type '\{scrutinee_ty_name}' (\{ind.constructors.length()})")
   }
 
-  let rec_name = Name::Path(Leaf(scrutinee_ty_name), "rec")
+  let rec_name = Name::Path(scrutinee_ty_name, "rec")
   let (rec_ty, num_minors, rec_uvs) = match self.ctx.env.decls.get(rec_name) {
     Some({ decl: Recursor(ty~, num_minors~, ..), uvs }) => (ty, num_minors, uvs)
     _ => raise ElaborationError::Message("No recursor found for inductive type '\{scrutinee_ty_name}'")
