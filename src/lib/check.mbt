@@ -205,8 +205,56 @@ pub fn Context::init_default_inductives(self: Context) -> Unit {
 }
 
 pub fn Context::add_decl(self: Context, name: Name, uvs: Array[UniverseVar], decl: Decl[Term]) -> Unit raise TypeCheckError {
-  self.check_decl(name, uvs, decl)
-  self.env.add(name, uvs, decl)
+  match decl {
+    Inductive(ind) => {
+      // Validate the complete declaration in isolation. No provisional type or
+      // constructor may survive a failure, including recursor name collisions.
+      let staged: Context = {
+        env: { decls: self.env.decls.copy() },
+        free_vars: self.free_vars.copy(),
+        next_free_var_id: self.next_free_var_id,
+      }
+      staged.check_decl(name, uvs, decl)
+      let param_binders: Array[(String, Term)] = []
+      let mut arity = ind.ty
+      for _ in ind.params {
+        match arity {
+          Pi(Some(x), a, b) => {
+            param_binders.push((x, a))
+            arity = b
+          }
+          _ => raise TypeError(ind.ty, "Inductive parameters must have named binders")
+        }
+      }
+      // Retain canonical parameter metadata derived from the checked arity.
+      let ind: InductiveDecl[Term] = {
+        params: param_binders,
+        constructors: ind.constructors,
+        ty: ind.ty,
+      }
+      staged.env.add(name, uvs, Inductive(ind))
+      for entry in ind.constructors {
+        let (ctor, body) = entry
+        let mut ty = body
+        for binder in param_binders.rev_iter() {
+          let (x, a) = binder
+          ty = Pi(Some(x), a, ty)
+        }
+        let ctor_decl = Constructor(ind~, ty~)
+        staged.check_decl(Path(name, ctor), uvs, ctor_decl)
+        staged.env.add(Path(name, ctor), uvs, ctor_decl)
+      }
+      staged.generate_recursor(name, uvs, ind)
+      for key, value in staged.env.decls { self.env.decls[key] = value }
+      self.next_free_var_id = staged.next_free_var_id
+    }
+    Constructor(..) | Recursor(..) =>
+      raise TypeError(decl.ty(), "Constructors and recursors must be generated with their inductive declaration")
+    _ => {
+      self.check_decl(name, uvs, decl)
+      self.env.add(name, uvs, decl)
+    }
+  }
 }
 
 fn Context::check_decl(self: Context, name: Name, uvs: Array[UniverseVar], decl: Decl[Term]) -> Unit raise TypeCheckError {
@@ -228,27 +276,44 @@ fn Context::check_decl(self: Context, name: Name, uvs: Array[UniverseVar], decl:
     }
   }
 
+  decl.ty().check_scope(uvs)
   // check that all the top-level declarations are well-typed
   match decl {
     Axiom(ty) => { let _ = ensure_sort("axiom", ty) }
     Definition(ty, body) => {
       let _ = ensure_sort("definition", ty)
+      body.check_scope(uvs)
       self.check(body, ty)
     }
     Theorem(ty, proof) => {
       let _ = ensure_sort("theorem", ty)
+      proof.check_scope(uvs)
       self.check(proof, ty)
     }
     Inductive({ ty, .. }) => {
-      let arity_tys = ty.collect_pi_types()
-      if !(arity_tys.last() is Some(Sort(_))) {
-        raise TypeError(ty, "Invalid type for inductive '\{name}': expected a Pi type ending in a sort, got '\{ty}'")
+      let _ = ensure_sort("inductive", ty)
+      let cleanup: Array[FreeVarId] = []
+      defer { for id in cleanup { self.free_vars.remove(id) } }
+      let (_, result) = self.open_telescope(ty, cleanup)
+      match result {
+        Sort(u) => {
+          // A polymorphic result must remain data at every instantiation, or
+          // remain Prop. In particular, bare Sort u may not gain large elimination.
+          if !(u == Zero) && !Level::from(1).leq(u, 0) {
+            raise TypeError(ty, "Inductive result universe must be Prop or always positive")
+          }
+        }
+        _ => raise TypeError(ty, "Inductive arity must end in a sort")
       }
     }
     // https://lean-lang.org/doc/reference/latest/The-Type-System/Inductive-Types/#well-formed-inductives  
     // https://ammkrn.github.io/type_checking_in_lean4/declarations/inductive.html#constructor
     Constructor(ind={ params, ty: ind_ty, .. }, ty=ctor_ty) => {
-      let inductive_name = Leaf(name.root())
+      let inductive_name = match name {
+        Path(parent, _) => parent
+        _ => raise TypeError(ctor_ty, "Constructor must belong to an inductive namespace")
+      }
+      let ind_levels = uvs.map(u => Level::Param(u))
       let _ = ensure_sort("constructor", ctor_ty)
       let free_vars_to_remove: Array[FreeVarId] = []
       
@@ -260,10 +325,10 @@ fn Context::check_decl(self: Context, name: Name, uvs: Array[UniverseVar], decl:
 
       // Open the inductive type's params to establish param FreeVars and get the opened arity
       let (param_vars, opened_arity) = self.open_binders(ind_ty, params.length(), free_vars_to_remove)
-      let arity_tys = opened_arity.collect_pi_types()
-      let ind_level = match arity_tys.last() {
-        Some(Sort(u)) => u
-        last => raise TypeError(ctor_ty, "Invalid constructor type for '\{name}': expected resulting type to be a sort, got '\{last}'")
+      let (_, result_sort) = self.open_telescope(opened_arity, free_vars_to_remove)
+      let ind_level = match result_sort {
+        Sort(u) => u
+        _ => raise TypeError(ctor_ty, "Inductive arity must end in a sort")
       }
 
       // 1. Strip params from the constructor type, reusing the inductive type's param FreeVars
@@ -283,6 +348,7 @@ fn Context::check_decl(self: Context, name: Name, uvs: Array[UniverseVar], decl:
 
       // 2-4. Check non-parameter constructor arguments
       let mut arg_idx = 0
+      rem_ty = self.whnf(rem_ty)
       while rem_ty is Pi(x, arg_ty, rest) {
         let s = self.infer(arg_ty)
         if self.whnf(s) is Sort(u) {
@@ -295,7 +361,7 @@ fn Context::check_decl(self: Context, name: Name, uvs: Array[UniverseVar], decl:
             )
           }
 
-          if !self.is_strictly_positive(arg_ty, inductive_name) {
+          if !self.is_strictly_positive(arg_ty, inductive_name, param_vars~, ind_levels~) {
             raise TypeError(ctor_ty, "Constructor '\{name}' has a non strictly-positive occurrence of the inductive type being declared in argument #\{arg_idx + 1}")
           }
 
@@ -310,11 +376,12 @@ fn Context::check_decl(self: Context, name: Name, uvs: Array[UniverseVar], decl:
           raise TypeError(ctor_ty, "Constructor '\{name}' has non-type parameter '\{arg_ty}'")
         }
 
+        rem_ty = self.whnf(rem_ty)
         arg_idx += 1
       }
 
       // 5. Check return type is a valid application of the inductive type
-      if !self.is_valid_inductive_app(rem_ty, inductive_name, param_vars, arity_tys) {
+      if !self.is_valid_inductive_app(rem_ty, inductive_name, ind_levels, param_vars, opened_arity) {
         raise TypeError(ctor_ty, "Constructor '\{name}' has invalid resulting type '\{rem_ty}', expected an application of the inductive type being declared to its parameters")
       }
     }
@@ -326,20 +393,26 @@ fn Context::check_decl(self: Context, name: Name, uvs: Array[UniverseVar], decl:
 
 // Given a term and an inductive name + param FreeVars, check if the term is
 // an application of `I param_fvars... indices...`. If so, return Some(indices).
-fn is_ind_app(term: Term, ind_name: Name, param_vars: Array[OpenedBinder]) -> ArrayView[Term]? {
+fn Context::is_ind_app(
+  self: Context,
+  term: Term,
+  ind_name: Name,
+  ind_levels: Array[Level],
+  param_vars: Array[OpenedBinder],
+) -> ArrayView[Term]? raise TypeCheckError {
   let (head, args) = term.collect_app_args()
   let n_params = param_vars.length()
 
   match head {
-    Const(c, _) => {
-      if c != ind_name || args.length() < n_params {
+    Const(c, levels) => {
+      if c != ind_name || levels != ind_levels || args.length() < n_params {
         return None
       }
 
       // Check that the first n_params args match the param FreeVars
       for i in 0..<n_params {
         let { name, fvar, .. } = param_vars[i]
-        if !args[i].is_alpha_eq(FreeVar(name, fvar)) {
+        if !self.is_def_eq(args[i], FreeVar(name, fvar)) {
           return None
         }
       }
@@ -412,7 +485,7 @@ fn Context::generate_recursor(self: Context, ind_name: Name, uvs: Array[Universe
     let fresh = self.declare_fresh(a)
     cleanup.push(fresh)
     index_vars.push({ name, fvar: fresh, ty: a })
-    remaining = instantiate(b, 0, FreeVar(name, fresh))
+    remaining = self.whnf(instantiate_pi(x, b, FreeVar(name, fresh)))
     index_idx += 1
   }
 
@@ -431,10 +504,13 @@ fn Context::generate_recursor(self: Context, ind_name: Name, uvs: Array[Universe
   // so the recursor can eliminate to any sort level
   let (elim_level, rec_uvs) = {
     let simplified = result_level.simplify()
-    if simplified is Zero {
+    if simplified == Zero {
       // Small elimination: motive always maps to Prop
       (Level::Zero, uvs)
     } else {
+      if !Level::from(1).leq(result_level, 0) {
+        raise TypeError(ind_ty, "Large elimination requires an always-positive result universe")
+      }
       // Large elimination: add a fresh universe parameter
       let mut uv_name = "u_1"
       let mut i = 1
@@ -494,19 +570,20 @@ fn Context::generate_recursor(self: Context, ind_name: Name, uvs: Array[Universe
     // Collect constructor arguments (non-param args) by opening Pi binders
     let ctor_arg_vars: Array[OpenedBinder] = []
     let mut param_idx = 1
+    ctor_remaining = self.whnf(ctor_remaining)
     while ctor_remaining is Pi(x, a, b) {
       let name = match x { Some(x) => x; None => "a\{param_idx}" }
       let fresh = self.declare_fresh(a)
       cleanup.push(fresh)
       minor_cleanup.push(fresh)
       ctor_arg_vars.push({ name, fvar: fresh, ty: a })
-      ctor_remaining = instantiate(b, 0, FreeVar(name, fresh))
+      ctor_remaining = self.whnf(instantiate_pi(x, b, FreeVar(name, fresh)))
       param_idx += 1
     }
 
     // ctor_remaining is now the return type: I params... i1 ... im
     // Extract the constructor's specific indices
-    let ctor_indices = match is_ind_app(ctor_remaining, ind_name, param_vars) {
+    let ctor_indices = match self.is_ind_app(ctor_remaining, ind_name, ind_levels, param_vars) {
       Some(idxs) => idxs
       None => raise TypeError(ctor_ty, "Constructor '\{ctor_name}' return type is not a valid application of '\{ind_name}'")
     }
@@ -532,14 +609,16 @@ fn Context::generate_recursor(self: Context, ind_name: Name, uvs: Array[Universe
     let ih_vars: Array[OpenedBinder] = []
     let rec_field_indices: Array[Int] = []
     for i, a in ctor_arg_vars {
-      if is_ind_app(a.ty, ind_name, param_vars) is Some(rec_indices) {
+      let (field_binders, field_result) = self.open_telescope(a.ty, minor_cleanup)
+      if self.is_ind_app(field_result, ind_name, ind_levels, param_vars) is Some(rec_indices) {
         rec_field_indices.push(i)
-        // IH type: C rec_indices... a_fvar
-        let ih_ty = mk_app(motive_fvar, rec_indices.iter())
-        let ih_ty = Term::App(ih_ty, FreeVar(a.name, a.fvar))
+        let field_app = mk_app(FreeVar(a.name, a.fvar), field_binders.iter().map(b => FreeVar(b.name, b.fvar)))
+        let mut ih_ty = Term::App(mk_app(motive_fvar, rec_indices.iter()), field_app)
+        for b in field_binders.rev_iter() {
+          ih_ty = close_pi(ih_ty, b.name, b.fvar, b.ty)
+        }
         let ih_name = "\{a.name}_ih"
         let ih_fvar = self.declare_fresh(ih_ty)
-        cleanup.push(ih_fvar)
         minor_cleanup.push(ih_fvar)
         ih_vars.push({ name: ih_name, fvar: ih_fvar, ty: ih_ty })
       }
@@ -597,7 +676,12 @@ fn Context::generate_recursor(self: Context, ind_name: Name, uvs: Array[Universe
     rec_result = close_pi(rec_result, p.name, p.fvar, p.ty)
   }
 
-  // 8. Add to the environment
+  // Generated signatures must satisfy the same regularity and scope invariants
+  // as user declarations before they become trusted environment entries.
+  rec_result.check_scope(rec_uvs)
+  if !(self.whnf(self.infer(rec_result)) is Sort(_)) {
+    raise TypeError(rec_result, "Generated recursor does not have a well-formed type")
+  }
   self.env.add(Path(ind_name, "rec"), rec_uvs, Recursor(
     ind~,
     ty=rec_result,
@@ -606,24 +690,93 @@ fn Context::generate_recursor(self: Context, ind_name: Name, uvs: Array[Universe
     num_minors=constructors.length(),
     rules=rec_rules,
   ))
+  self.check_recursor_rules(ind_name, ind_levels, rec_uvs, ind, rec_result, rec_rules)
 }
 
-fn Context::is_strictly_positive(self: Context, ty: Term, inductive_type_name: Name) -> Bool raise TypeCheckError {
-  // non-recursive case
-  if !const_occurs_in(inductive_type_name, ty) {
-    return true
+// Check subject reduction for every constructor with fresh, neutral parameters,
+// motives, handlers, and fields. Functional IHs remain neutral recursive calls,
+// so this check does not evaluate an inductive value recursively.
+fn Context::check_recursor_rules(
+  self : Context,
+  ind_name : Name,
+  ind_levels : Array[Level],
+  rec_uvs : Array[UniverseVar],
+  ind : InductiveDecl[Term],
+  rec_ty : Term,
+  rules : Array[RecRule],
+) -> Unit raise TypeCheckError {
+  let cleanup : Array[FreeVarId] = []
+  defer (for id in cleanup {
+    self.free_vars.remove(id)
+  })
+  let num_params = ind.params.length()
+  let (prefix, _) = self.open_binders(
+    rec_ty,
+    num_params + 1 + rules.length(),
+    cleanup,
+  )
+  let params : Array[OpenedBinder] = []
+  for i in 0..<num_params {
+    params.push(prefix[i])
   }
+  let rec = mk_app(
+    Const(Path(ind_name, "rec"), rec_uvs.map(u => Level::Param(u))),
+    prefix.iter().map(b => FreeVar(b.name, b.fvar)),
+  )
+  for i, rule in rules {
+    let mut ctor_ty = ind.constructors[i].1
+    for j in 0..<num_params {
+      let p = params[num_params - 1 - j]
+      ctor_ty = instantiate(
+        ctor_ty,
+        j.reinterpret_as_uint(),
+        FreeVar(p.name, p.fvar),
+      )
+    }
+    let (fields, result) = self.open_telescope(ctor_ty, cleanup)
+    let indices = match self.is_ind_app(result, ind_name, ind_levels, params) {
+      Some(indices) => indices
+      None =>
+        raise TypeError(result, "Invalid constructor result in recursor rule")
+    }
+    let ctor = mk_app(
+      Const(rule.ctor, ind_levels),
+      params.iter().map(b => FreeVar(b.name, b.fvar)),
+    )
+    let ctor = mk_app(ctor, fields.iter().map(b => FreeVar(b.name, b.fvar)))
+    let application = Term::App(mk_app(rec, indices.iter()), ctor)
+    let expected = self.infer(application)
+    self.check(self.whnf(application), expected)
+  }
+}
 
+fn Context::is_strictly_positive(
+  self: Context,
+  ty: Term,
+  inductive_type_name: Name,
+  param_vars~: Array[OpenedBinder] = [],
+  ind_levels~: Array[Level] = [],
+) -> Bool raise TypeCheckError {
+  let ty = self.whnf(ty)
+  if !const_occurs_in(inductive_type_name, ty) { return true }
   match ty {
-    Const(_) => true // `I`: simple case
-    App(_) => { // `I t1, ..., tn` simple case, where I does not occur in ti for any i
-      let (_head, args) = ty.collect_app_args()
-      return !args.iter().any(arg => const_occurs_in(inductive_type_name, arg))
+    Pi(x, a, b) => {
+      // Normalize the domain too: negative occurrences can hide behind beta,
+      // delta, zeta, or annotations. Nested recursive type constructors are not
+      // supported by this kernel and must not be silently accepted.
+      if const_occurs_in(inductive_type_name, self.normalise(a)) { return false }
+      let fresh = self.declare_fresh(a)
+      defer self.free_vars.remove(fresh)
+      let body = instantiate_pi(x, b, FreeVar("_", fresh))
+      self.is_strictly_positive(body, inductive_type_name, param_vars~, ind_levels~)
     }
-    Pi(_, a, b) => { // functional case
-      !const_occurs_in(inductive_type_name, a) && self.is_strictly_positive(b, inductive_type_name)
+    Const(_) | App(_) => {
+      match self.is_ind_app(ty, inductive_type_name, ind_levels, param_vars) {
+        Some(indices) => !indices.iter().any(arg => const_occurs_in(inductive_type_name, arg))
+        None => false
+      }
     }
-    _ => true
+    _ => false
   }
 }
 
@@ -641,7 +794,7 @@ fn Context::open_binders(
   cleanup: Array[FreeVarId]
 ) -> (Array[OpenedBinder], Term) raise TypeCheckError {
   let binders: Array[OpenedBinder] = []
-  let mut remaining = ty
+  let mut remaining = self.whnf(ty)
 
   for _ in 0..<n {
     match remaining {
@@ -650,12 +803,26 @@ fn Context::open_binders(
         let fresh = self.declare_fresh(a)
         cleanup.push(fresh)
         binders.push({ name, fvar: fresh, ty: a })
-        remaining = instantiate(b, 0, FreeVar(name, fresh))
+        remaining = self.whnf(instantiate_pi(x, b, FreeVar(name, fresh)))
       }
       _ => raise TypeError(ty, "Expected at least \{n} Pi binders")
     }
   }
 
+  (binders, remaining)
+}
+
+// Open a whole telescope in order, preserving dependencies on earlier binders.
+fn Context::open_telescope(self: Context, ty: Term, cleanup: Array[FreeVarId]) -> (Array[OpenedBinder], Term) raise TypeCheckError {
+  let binders: Array[OpenedBinder] = []
+  let mut remaining = self.whnf(ty)
+  while remaining is Pi(x, a, b) {
+    let name = match x { Some(x) => x; None => "_" }
+    let fresh = self.declare_fresh(a)
+    cleanup.push(fresh)
+    binders.push({ name, fvar: fresh, ty: a })
+    remaining = self.whnf(instantiate_pi(x, b, FreeVar(name, fresh)))
+  }
   (binders, remaining)
 }
 
@@ -667,37 +834,25 @@ fn Context::is_valid_inductive_app(
   self: Context,
   term: Term,
   inductive_name: Name,
+  ind_levels: Array[Level],
   param_vars: Array[OpenedBinder],
-  arity_tys: Array[Term]
+  opened_arity: Term,
 ) -> Bool raise TypeCheckError {
-  let (head, args) = term.collect_app_args()
-  let n_params = param_vars.length()
-  let n_indices = arity_tys.length() - 1
-
-  let head_ok = match head {
-    Const(n, _) => n == inductive_name
-    _ => false
+  let indices = match self.is_ind_app(self.whnf(term), inductive_name, ind_levels, param_vars) {
+    Some(indices) => indices
+    None => return false
   }
-
-  if !head_ok || args.length() != n_params + n_indices {
-    return false
-  }
-
-  for i in 0..<n_params {
-    let { name, fvar, .. } = param_vars[i]
-    if !self.is_def_eq(args[i], FreeVar(name, fvar)) {
-      return false
+  let mut remaining = opened_arity
+  for index in indices {
+    match self.whnf(remaining) {
+      Pi(x, domain, body) => {
+        self.check(index, domain)
+        remaining = instantiate_pi(x, body, index)
+      }
+      _ => return false
     }
   }
-
-  for i in 0..<n_indices {
-    let index_ty = self.infer(args[n_params + i])
-    if !self.is_def_eq(arity_tys[i], index_ty) {
-      return false
-    }
-  }
-
-  true
+  self.whnf(remaining) is Sort(_)
 }
 
 fn Context::fresh_var_id(self: Context) -> FreeVarId raise TypeCheckError {
@@ -774,17 +929,14 @@ fn Context::normalise(self: Context, term: Term) -> Term raise TypeCheckError {
     }
     Pi(x, a, b) => {
       let a_norm = self.normalise(a)
-      let b_norm = if x is Some(x) {
-        let fresh_x = self.declare_fresh(a)
-        defer self.free_vars.remove(fresh_x)
-
-        let opened = open(b, 0, x, fresh_x)
-        close(self.normalise(opened), fresh_x, 0)
-      } else {
-        self.normalise(b)
+      match x {
+        Some(name) => {
+          let fresh = self.declare_fresh(a)
+          defer self.free_vars.remove(fresh)
+          close_pi(self.normalise(open(b, 0, name, fresh)), name, fresh, a_norm)
+        }
+        None => Pi(None, a_norm, self.normalise(b))
       }
-
-      Pi(x, a_norm, b_norm)
     }
     Let(_, val, body) => self.normalise(instantiate(body, 0, self.normalise(val)))
     Ann(lhs, _) => self.normalise(lhs)
@@ -806,10 +958,10 @@ fn extract_indices(term: Term, ind_name: Name, num_params: Int) -> ArrayView[Ter
 // Try iota reduction: if head is a recursor and the major premise reduces to a constructor, fire the rule
 fn Context::try_iota_reduce(self: Context, head: Term, args: ArrayView[Term]) -> Term? raise TypeCheckError {
   let (rec_name, rec_levels) = if head is Const(name, levels) { (name, levels) } else { return None }
-  let ind_name = Leaf(rec_name.root())
-  let (ind, num_params, num_indices, num_minors, rules) = match self.env.decls.get(rec_name) {
-    Some({ decl: Recursor(ind~, num_params~, num_indices~, num_minors~, rules~, ..), .. }) =>
-      (ind, num_params, num_indices, num_minors, rules)
+  let ind_name = if rec_name is Path(parent, _) { parent } else { return None }
+  let (ind, rec_uvs, num_params, num_indices, num_minors, rules) = match self.env.decls.get(rec_name) {
+    Some({ uvs, decl: Recursor(ind~, num_params~, num_indices~, num_minors~, rules~, ..) }) =>
+      (ind, uvs, num_params, num_indices, num_minors, rules)
     _ => return None
   }
 
@@ -853,7 +1005,7 @@ fn Context::try_iota_reduce(self: Context, head: Term, args: ArrayView[Term]) ->
 
   // Instantiate params into constructor type
   let num_p = num_params
-  let mut ctor_remaining = ctor_ty
+  let mut ctor_remaining = ctor_ty.subst_levels((rec_uvs, rec_levels))
   for i in 0..<num_p {
     ctor_remaining = instantiate(ctor_remaining, i.reinterpret_as_uint(), params[num_p - 1 - i])
   }
@@ -865,33 +1017,31 @@ fn Context::try_iota_reduce(self: Context, head: Term, args: ArrayView[Term]) ->
 
     if rule.rec_fields.contains(k) {
       // Get the field's type from ctor_remaining to extract IH indices
-      let field_ty = if ctor_remaining is Pi(_, a, _) { a } else { return None }
-      let ih_indices = match extract_indices(field_ty, ind_name, num_params) {
+      let field_ty = if self.whnf(ctor_remaining) is Pi(_, a, _) { a } else { return None }
+      let cleanup: Array[FreeVarId] = []
+      defer { for id in cleanup { self.free_vars.remove(id) } }
+      let (field_binders, field_result) = self.open_telescope(field_ty, cleanup)
+      let ih_indices = match extract_indices(field_result, ind_name, num_params) {
         Some(idxs) => idxs
         None => return None
       }
 
-      // Build IH: rec_name params... motive minors... ih_indices... field
+      // A functional recursive field contributes a pointwise recursive call.
       let mut ih = Const(rec_name, rec_levels)
-      for p in params {
-        ih = App(ih, p)
+      for p in params { ih = App(ih, p) }
+      ih = App(ih, args[num_params])
+      for m in minors { ih = App(ih, m) }
+      for idx in ih_indices { ih = App(ih, idx) }
+      let field_app = mk_app(fields[k], field_binders.iter().map(b => FreeVar(b.name, b.fvar)))
+      ih = App(ih, field_app)
+      for b in field_binders.rev_iter() {
+        ih = Lam(b.name, b.ty, close(ih, b.fvar, 0))
       }
-
-      ih = App(ih, args[num_params]) // motive
-      for m in minors {
-        ih = App(ih, m)
-      }
-
-      for idx in ih_indices {
-        ih = App(ih, idx)
-      }
-
-      ih = App(ih, fields[k])
       ih_terms.push(ih)
     }
 
     // Advance ctor_remaining by substituting this field into the Pi body
-    if ctor_remaining is Pi(x, _, b) {
+    if self.whnf(ctor_remaining) is Pi(x, _, b) {
       ctor_remaining = if x is Some(_) {
         instantiate(b, 0, fields[k])
       } else {
@@ -949,6 +1099,11 @@ pub fn Context::whnf(self: Context, term: Term) -> Term raise TypeCheckError {
     Ann(lhs, _) => self.whnf(lhs)
     Lam(_) | Pi(_) | Sort(_) | BoundVar(_) | FreeVar(_) => term
   }
+}
+
+// None denotes a nonbinding arrow; never substitute into its codomain.
+fn instantiate_pi(name: String?, body: Term, arg: Term) -> Term {
+  if name is Some(_) { instantiate(body, 0, arg) } else { body }
 }
 
 fn instantiate(term: Term, idx: DeBruijnIndex, s: Term) -> Term {
@@ -1023,9 +1178,9 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
     }
     App(lhs, rhs) => {
       match self.whnf(self.infer(lhs)) {
-        Pi(_, t0, t1) => {
+        Pi(x, t0, t1) => {
           self.check(rhs, t0)
-          instantiate(t1, 0, rhs)
+          instantiate_pi(x, t1, rhs)
         }
         lhs_ty => raise TypeError(term, "Expected LHS of application '\{term}' to be a Pi term, got '\{lhs_ty}'")
       }
@@ -1147,7 +1302,10 @@ fn Context::is_def_eq(self: Context, t1: Term, t2: Term) -> Bool raise TypeCheck
       defer self.free_vars.remove(fresh)
       let name1 = match x1 { Some(x) => x; None => "_" }
       let name2 = match x2 { Some(x) => x; None => "_" }
-      self.is_def_eq(open(b1, 0, name1, fresh), open(b2, 0, name2, fresh))
+      self.is_def_eq(
+        instantiate_pi(x1, b1, FreeVar(name1, fresh)),
+        instantiate_pi(x2, b2, FreeVar(name2, fresh)),
+      )
     }
 
     // For remaining head forms: try structural comparison, then proof irrelevance
@@ -1169,15 +1327,19 @@ fn Context::is_def_eq(self: Context, t1: Term, t2: Term) -> Bool raise TypeCheck
       {
         let ty1 = self.infer(w1)
         let s1 = self.whnf(self.infer(ty1))
-        if !(s1 is Sort(Zero)) {
-          return false
+        let l1 = match s1 {
+          Sort(level) => level
+          _ => return false
         }
+        if !(l1 == Zero) { return false }
         
         let ty2 = self.infer(w2)
         let s2 = self.whnf(self.infer(ty2))
-        if !(s2 is Sort(Zero)) {
-          return false
+        let l2 = match s2 {
+          Sort(level) => level
+          _ => return false
         }
+        if !(l2 == Zero) { return false }
 
         self.is_def_eq(ty1, ty2)
       }

@@ -100,27 +100,15 @@ pub fn Elaborator::elaborate_decl(self: Elaborator, name: Name, uvs: Array[Unive
       let params_elab: Array[(String, Term)] = []
       
       for param in params {
-        self.bound_vars.push(param.0)
         params_elab.push((param.0, self.elaborate_term(param.1)))
+        self.bound_vars.push(param.0)
       }
 
       let constructors_elab = constructors.map(ctor => (ctor.0, self.elaborate_term(ctor.1)))
+      self.bound_vars.truncate(original_bound_vars_len)
       let ty_elab = self.elaborate_term(ty)
       let ind_elab: InductiveDecl[Term] = { params: params_elab, constructors: constructors_elab, ty: ty_elab }
       self.ctx.add_decl(name, uvs, Inductive(ind_elab))
-
-      for ctor in constructors {
-        let mut ctor_ty = ctor.1
-        
-        for arg in params.rev_iter() {
-          ctor_ty = Pi(Some(arg.0), Some(arg.1), ctor_ty)
-        }
-
-        let ctor_ty_elab = self.elaborate_term(ctor_ty)
-        self.ctx.add_decl(Path(name, ctor.0), uvs, Constructor(ind=ind_elab, ty=ctor_ty_elab))
-      }
-
-      self.ctx.generate_recursor(name, uvs, ind_elab)
     }
     Constructor(_) => raise ElaborationError::Message("Constructors must be declared as part of an inductive type")
     Recursor(..) => raise ElaborationError::Message("Recursors are auto-generated and cannot be declared manually")
@@ -201,7 +189,7 @@ pub fn Elaborator::elaborate_term(self: Elaborator, term: STerm) -> Term raise {
     Let(x, ann, val, body) => {
       let val_elab = if ann is Some(ty) {
         let ty_elab = self.elaborate_term(ty)
-        self.elaborate_term_check(val, ty_elab)
+        Term::Ann(self.elaborate_term_check(val, ty_elab), ty_elab)
       } else {
         self.elaborate_term(val)
       }
@@ -226,10 +214,10 @@ pub fn Elaborator::elaborate_term_check(self: Elaborator, sterm: STerm, expected
   match sterm {
     Fun(x, None, body) => {
       match self.ctx.whnf(expected_ty) {
-        Pi(_, domain, codomain) => {
+        Pi(binder, domain, codomain) => {
           let fresh = self.ctx.declare_fresh(domain)
           defer self.ctx.free_vars.remove(fresh)
-          let opened_codomain = instantiate(codomain, 0, FreeVar(x, fresh))
+          let opened_codomain = instantiate_pi(binder, codomain, FreeVar(x, fresh))
           self.bound_vars.push(x)
           let bv_idx = self.bound_vars.length() - 1
           self.open_vars.push((bv_idx, fresh))
@@ -245,11 +233,11 @@ pub fn Elaborator::elaborate_term_check(self: Elaborator, sterm: STerm, expected
     }
     Fun(x, Some(ty_s), body) => {
       match self.ctx.whnf(expected_ty) {
-        Pi(_, _domain, codomain) => {
+        Pi(binder, _domain, codomain) => {
           let ty_elab = self.elaborate_term(ty_s)
           let fresh = self.ctx.declare_fresh(ty_elab)
           defer self.ctx.free_vars.remove(fresh)
-          let opened_codomain = instantiate(codomain, 0, FreeVar(x, fresh))
+          let opened_codomain = instantiate_pi(binder, codomain, FreeVar(x, fresh))
           self.bound_vars.push(x)
           let bv_idx = self.bound_vars.length() - 1
           self.open_vars.push((bv_idx, fresh))
@@ -284,7 +272,7 @@ pub fn Elaborator::elaborate_term_check(self: Elaborator, sterm: STerm, expected
     Let(x, ann, val, body) => {
       let val_elab = if ann is Some(ty) {
         let ty_elab = self.elaborate_term(ty)
-        self.elaborate_term_check(val, ty_elab)
+        Term::Ann(self.elaborate_term_check(val, ty_elab), ty_elab)
       } else {
         self.elaborate_term(val)
       }
@@ -330,6 +318,45 @@ fn append_anon_binders(sterm: STerm, n: Int) -> STerm {
 
       result
     }
+  }
+}
+
+// Elaborate a motive while inferring its result universe. The recursor already
+// determines the motive's argument telescope, so use those domains to elaborate
+// unannotated lambdas and infer only the final body.
+fn Elaborator::elaborate_motive_infer(
+  self: Elaborator,
+  sterm: STerm,
+  motive_shape: Term,
+) -> Term raise {
+  match motive_shape {
+    Pi(binder, domain, codomain) => match sterm {
+      Fun(name, annotation, body) => {
+        if annotation is Some(annotation) {
+          let annotation = self.elaborate_term(annotation)
+          if !self.ctx.is_def_eq(annotation, domain) {
+            raise ElaborationError::Message(
+              "Motive argument '\{name}' has type '\{annotation}', expected '\{domain}'",
+            )
+          }
+        }
+
+        let fresh = self.ctx.declare_fresh(domain)
+        defer self.ctx.free_vars.remove(fresh)
+        let opened_codomain = instantiate_pi(binder, codomain, FreeVar(name, fresh))
+        self.bound_vars.push(name)
+        let bv_idx = self.bound_vars.length() - 1
+        self.open_vars.push((bv_idx, fresh))
+        defer {
+          let _ = self.bound_vars.unsafe_pop()
+          let _ = self.open_vars.unsafe_pop()
+        }
+        let body = self.elaborate_motive_infer(body, opened_codomain)
+        Lam(name, domain, close(body, fresh, 0))
+      }
+      _ => raise ElaborationError::Message("Motive has too few arguments")
+    }
+    _ => self.elaborate_term(sterm)
   }
 }
 
@@ -382,7 +409,7 @@ fn Elaborator::elaborate_match(
   let scrutinee_ty_whnf = self.ctx.whnf(scrutinee_ty)
   let (scrutinee_ty_head, scrutinee_ty_params) = scrutinee_ty_whnf.collect_app_args()
   let scrutinee_ty_name = match scrutinee_ty_head {
-    Const(name, _) => name.root()
+    Const(name, _) => name
     other => raise ElaborationError::Message("Expected scrutinee of 'match' to have an inductive type, got '\{other}'")
   }
 
@@ -392,7 +419,7 @@ fn Elaborator::elaborate_match(
     _ => []
   }
 
-  let (ind, uvs) = match self.ctx.env.decls.get(Leaf(scrutinee_ty_name)) {
+  let (ind, uvs) = match self.ctx.env.decls.get(scrutinee_ty_name) {
     Some({ decl: Inductive(ind), uvs }) => (ind, uvs)
     _ => raise ElaborationError::Message("Expected scrutinee of 'match' to have an inductive type, got '\{scrutinee_ty}'")
   }
@@ -403,7 +430,7 @@ fn Elaborator::elaborate_match(
     raise ElaborationError::Message("Number of match cases (\{cases.length()}) does not match number of constructors for type '\{scrutinee_ty_name}' (\{ind.constructors.length()})")
   }
 
-  let rec_name = Name::Path(Leaf(scrutinee_ty_name), "rec")
+  let rec_name = Name::Path(scrutinee_ty_name, "rec")
   let (rec_ty, num_minors, rec_uvs) = match self.ctx.env.decls.get(rec_name) {
     Some({ decl: Recursor(ty~, num_minors~, ..), uvs }) => (ty, num_minors, uvs)
     _ => raise ElaborationError::Message("No recursor found for inductive type '\{scrutinee_ty_name}'")
@@ -432,7 +459,10 @@ fn Elaborator::elaborate_match(
           Some(m) => m
           None => raise ElaborationError::Message("Match without expected type requires a return type annotation (use 'return <type>')")
         }
-        let mut abstract_partial = rec_ty
+        // Substitute the inductive's concrete universes before using the
+        // motive telescope. The final recursor universe remains symbolic until
+        // the motive body below determines it.
+        let mut abstract_partial = rec_ty.subst_levels((uvs, ind_levels))
         for i in 0..<num_ind_params {
           match abstract_partial {
             Pi(Some(_), _, body) => { abstract_partial = instantiate(body, 0, scrutinee_ty_params[i]) }
@@ -452,7 +482,7 @@ fn Elaborator::elaborate_match(
           m_sterm
         }
         
-        let motive_pre_elab = self.elaborate_term(wrapped)
+        let motive_pre_elab = self.elaborate_motive_infer(wrapped, abstract_motive_ty)
         let motive_ty_inferred = self.ctx.infer(motive_pre_elab)
         let types = motive_ty_inferred.collect_pi_types()
         
