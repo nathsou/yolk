@@ -56,7 +56,8 @@ Positivity checking reduces field types before inspecting their shape. Recursive
 occurrences may be direct applications of the declared inductive, or occur under
 function codomains whose domains do not contain the inductive. Recursive
 applications must preserve universe instances and parameters, and must not contain
-recursive occurrences in indices. Nested inductives are not supported.
+recursive occurrences in indices. The inductive may not occur in the indices
+of a constructor's result type either. Nested inductives are not supported.
 
 Indices are checked by walking and instantiating the arity in declaration order;
 later index domains may depend on earlier indices.
@@ -81,3 +82,9 @@ the structural positivity and universe restrictions; they do not replace them.
 An annotated let retains `Ann(value, type)` in its core term. Expected types used
 while elaborating are hints, so discarding the annotation would otherwise allow
 it to escape kernel validation.
+
+## Reduction under binders
+
+`whnf` and `instantiate` assume locally closed terms. When inferring a Pi, the
+sort of its body is reduced while the binder is still opened as a free variable;
+closing first would leave a loose index that substitution could capture.

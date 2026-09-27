@@ -844,6 +844,10 @@ fn Context::is_valid_inductive_app(
   }
   let mut remaining = opened_arity
   for index in indices {
+    // The inductive being declared may not occur in its constructors' result indices.
+    if const_occurs_in(inductive_name, index) {
+      return false
+    }
     match self.whnf(remaining) {
       Pi(x, domain, body) => {
         self.check(index, domain)
@@ -1206,15 +1210,17 @@ pub fn Context::infer(self: Context, term: Term) -> Term raise TypeCheckError {
         raise TypeError(term, "Invalid Pi argument type, got '\{s1}'")
       }
 
+      // Reduce while the binder is still open: whnf must not see loose bound
+      // variables, since instantiate does not shift its replacement.
       let s2 = if x is Some(x) {
         let fresh_x = self.declare_fresh(arg_ty)
         defer self.free_vars.remove(fresh_x)
-        close(self.infer(open(body_ty, 0, x, fresh_x)), fresh_x, 0)
+        self.whnf(self.infer(open(body_ty, 0, x, fresh_x)))
       } else {
-        self.infer(body_ty)
+        self.whnf(self.infer(body_ty))
       }
 
-      let l2 = if self.whnf(s2) is Sort(u) {
+      let l2 = if s2 is Sort(u) {
         u
       } else {
         raise TypeError(term, "Invalid Pi body type, got '\{s2}'")

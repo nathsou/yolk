@@ -389,3 +389,28 @@ test "uniform inductive parameters use definitional equality" {
     ["true"],
   )
 }
+
+///|
+test "Pi bodies are sorted before closing their binder" {
+  // Reducing after closing would capture the bound variable and evaluate
+  // `M x` as `M true`, accepting a Pi whose body is not a type.
+  assert_kernel_rejects(
+    (
+      #|def M (b : Bool) : Type := Bool.rec.{2} (fun _ => Type) Prop (Nat -> Nat) b
+      #|def B : forall a : Bool, (fun (a2 : Bool) => (fun (c : Bool) => M a2) true) a :=
+      #|  fun x => Bool.rec.{1} (fun b => M b) True (fun n : Nat => n) x
+      #|#check forall x : Bool, B x
+    ),
+  )
+}
+
+///|
+test "reject the inductive in its constructor result indices" {
+  assert_kernel_rejects("inductive T : Type -> Type | mk : T (T Nat)")
+  assert_kernel_rejects(
+    (
+      #|def Id (A : Type) : Type := A
+      #|inductive T : Type -> Type | mk : T (Id (T Nat))
+    ),
+  )
+}
