@@ -119,20 +119,24 @@ pub fn Level::simplify(u: Level) -> Level {
 }
 
 // Decide u <= v + n for every assignment of natural numbers to parameters.
-// Split each parameter once into zero or successor. In each case imax reduces
-// to max, and levels are maxima of constants and independent variables + offsets.
-// This finite procedure is exponential in the number of distinct parameters.
+// Split each parameter that can decide an imax once into zero or successor.
+// In each case imax reduces to max, and levels are maxima of constants and
+// independent variables + offsets. This finite procedure is exponential in the
+// number of distinct parameters occurring in the second argument of an imax.
 pub fn Level::leq(u: Level, v: Level, n: Int) -> Bool {
   if n >= 0 && (u is Zero || u.structural_eq(v)) {
     return true
   }
-  let vars = u.free_vars().union(v.free_vars()).iter().to_array()
+  let split: Set[String] = @set.new()
+  u.collect_imax_vars(split)
+  v.collect_imax_vars(split)
+  let vars = split.iter().to_array()
   let positive: Set[String] = @set.new()
 
   fn cases(i: Int) -> Bool {
     if i == vars.length() {
-      let lhs = u.level_atoms(positive)
-      let rhs = v.level_atoms(positive)
+      let lhs = u.level_atoms(split, positive)
+      let rhs = v.level_atoms(split, positive)
       return lhs.iter().all(a => rhs.iter().any(b =>
         (a.0 is None || a.0 == b.0) && a.1 <= b.1 + n
       ))
@@ -147,22 +151,66 @@ pub fn Level::leq(u: Level, v: Level, n: Int) -> Bool {
   cases(0)
 }
 
-// Some(p), k denotes the residual nonnegative variable p plus k. A positive
-// original parameter is represented by p + 1; None denotes the constant zero.
-fn Level::level_atoms(self: Level, positive: Set[String]) -> Array[(String?, Int)] {
+// A level that is at least one under every assignment, recognised syntactically.
+fn Level::is_syntactically_positive(self: Level) -> Bool {
+  match self {
+    Succ(_) => true
+    Max(a, b) => a.is_syntactically_positive() || b.is_syntactically_positive()
+    IMax(_, b) => b.is_syntactically_positive()
+    Zero | Param(_) => false
+  }
+}
+
+// Collect the parameters whose zero/positive case decides some imax. Outside
+// such positions a parameter only contributes to a maximum, where it can be
+// kept as an unconstrained variable instead of being split.
+fn Level::collect_imax_vars(self: Level, vars: Set[String]) -> Unit {
+  match self {
+    Zero | Param(_) => ()
+    Succ(l) => l.collect_imax_vars(vars)
+    Max(a, b) => {
+      a.collect_imax_vars(vars)
+      b.collect_imax_vars(vars)
+    }
+    IMax(a, b) => {
+      a.collect_imax_vars(vars)
+      if b.is_syntactically_positive() {
+        b.collect_imax_vars(vars)
+      } else {
+        for p in b.free_vars() {
+          vars.add(p)
+        }
+      }
+    }
+  }
+}
+
+// Some(p), k denotes the nonnegative variable p plus k, and None the constant k.
+// A split parameter is either the constant zero or a residual variable plus one;
+// an unsplit parameter is itself an unconstrained variable. The second argument
+// of every imax is syntactically positive or mentions only split parameters, so
+// it is positive exactly when one of its atoms has a nonzero offset.
+fn Level::level_atoms(self: Level, split: Set[String], positive: Set[String]) -> Array[(String?, Int)] {
   match self {
     Zero => [(None, 0)]
-    Param(p) => if positive.contains(p) { [(Some(p), 1)] } else { [(None, 0)] }
-    Succ(l) => l.level_atoms(positive).map(a => (a.0, a.1 + 1))
+    Param(p) =>
+      if !split.contains(p) {
+        [(Some(p), 0)]
+      } else if positive.contains(p) {
+        [(Some(p), 1)]
+      } else {
+        [(None, 0)]
+      }
+    Succ(l) => l.level_atoms(split, positive).map(a => (a.0, a.1 + 1))
     Max(a, b) => {
-      let atoms = a.level_atoms(positive)
-      atoms.append(b.level_atoms(positive))
+      let atoms = a.level_atoms(split, positive)
+      atoms.append(b.level_atoms(split, positive))
       atoms
     }
     IMax(a, b) => {
-      let rhs = b.level_atoms(positive)
+      let rhs = b.level_atoms(split, positive)
       if rhs.iter().any(atom => atom.1 > 0) {
-        let atoms = a.level_atoms(positive)
+        let atoms = a.level_atoms(split, positive)
         atoms.append(rhs)
         atoms
       } else {
@@ -212,8 +260,10 @@ pub impl Show for Level with output(self: Level, logger: &Logger) -> Unit {
         logger.write_char(')')
       }
     }
-    Max(l1, l2) | IMax(l1, l2) => {
-      logger.write_string(if self is Max(_) { "(max " } else { "(imax " })
+    Max(l1, l2) | IMax(l1, l2) as simplified => {
+      // Name the operator of the simplified level being printed: simplification
+      // can turn a max into an imax (max (imax u v) 0 = imax u v).
+      logger.write_string(if simplified is Max(_) { "(max " } else { "(imax " })
       logger.write_object(l1)
       logger.write_char(' ')
       logger.write_object(l2)
@@ -273,6 +323,21 @@ fn Term::has_loose_bvar(self: Term, depth: DeBruijnIndex) -> Bool {
     Let(_, val, body) => val.has_loose_bvar(depth) || body.has_loose_bvar(depth + 1)
     Ann(lhs, rhs) => lhs.has_loose_bvar(depth) || rhs.has_loose_bvar(depth)
     Sort(_) | Const(_) | FreeVar(_) => false
+  }
+}
+
+// Whether every bound variable is bound within the term, given `depth`
+// enclosing binders.
+fn Term::is_locally_closed(self: Term, depth~: DeBruijnIndex = 0) -> Bool {
+  match self {
+    BoundVar(i) => i < depth
+    App(f, arg) | Ann(f, arg) => f.is_locally_closed(depth~) && arg.is_locally_closed(depth~)
+    Lam(_, ty, body) | Let(_, ty, body) =>
+      ty.is_locally_closed(depth~) && body.is_locally_closed(depth=depth + 1)
+    Pi(x, a, b) =>
+      a.is_locally_closed(depth~) &&
+      b.is_locally_closed(depth=if x is Some(_) { depth + 1 } else { depth })
+    Sort(_) | Const(_) | FreeVar(_) => true
   }
 }
 
@@ -621,7 +686,10 @@ test "Level::Show" {
   assert_eq(Max(Param("u"), Param("v")).to_string(), "(max u v)")
   assert_eq(IMax(Param("u"), Param("v")).to_string(), "(imax u v)")
   assert_eq(Succ(Param("u")).to_string(), "(u + 1)")
-  assert_eq(IMax(Max(Succ(Zero), Param("u")), Succ(Succ(Succ(Param("v"))))).to_string(), "(imax (max 1 u) (v + 3))")
+  // imax a (b + 1) simplifies to max a (b + 1), and is printed as such.
+  assert_eq(IMax(Max(Succ(Zero), Param("u")), Succ(Succ(Succ(Param("v"))))).to_string(), "(max (max 1 u) (v + 3))")
+  // The printed operator is the simplified one: max (imax u v) 0 = imax u v.
+  assert_eq(Max(IMax(Param("u"), Param("v")), Zero).to_string(), "(imax u v)")
 }
 
 // Global declarations may mention only their declared universe parameters and
