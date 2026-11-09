@@ -16,20 +16,21 @@ yolk ./examples/proofs.yolk
 ```
 
 ## Development
-Install [Moonbit](https://www.moonbitlang.com/):
+Install the latest [Moonbit](https://www.moonbitlang.com/) toolchain (tested with `moonc v0.10.20`):
 
 ```bash
-$ curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash -s '0.9.0+8a8d0e4df'
-moon run src/main/main.mbt
+curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+```
+
+```bash
+moon run src/main/main.mbt -- ./examples/proofs.yolk
+```
+
+```bash
+moon test --target native
 ```
 
 ## Build
-
-### wasm + wasi preview 1
-
-```bash
-moon build --release --target=wasm src/cli-wasi/cli-wasi.mbt
-```
 
 ### native
 
