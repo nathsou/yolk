@@ -65,7 +65,9 @@ test "type checking" {
 
   fn assert_type_err(term: String) -> Unit raise {
     let (ctx, term_elab) = elab_term(term)
-    let res = try? ctx.infer(term_elab)
+    let res : Result[Term, Error] = try Ok(ctx.infer(term_elab)) catch {
+      e => Err(e)
+    }
 
     if res is Ok(ty) {
       fail("Expected type error for '\{term}', but got type '\{ty}'")

@@ -45,12 +45,16 @@ pub impl Show for Token with output(self: Token, logger: &Logger) {
 
 pub suberror LexerError {
   UnexpectedChar(char~: Char, index~: Int)
+  NumberTooLarge(index~: Int)
 }
 
 pub impl Show for LexerError with output(self: LexerError, logger: &Logger) {
   match self {
     UnexpectedChar(char~, index~) => {
       logger.write_string("Unexpected character '\{char}' at index \{index}")
+    }
+    NumberTooLarge(index~) => {
+      logger.write_string("Numeric literal at index \{index} is too large")
     }
   }
 }
@@ -233,12 +237,18 @@ fn Lexer::next(self: Lexer) -> LexerResult {
           }
         }
       } else if is_digit(char) {
+          let start = self.index
           let mut n = parse_digit(char)
           self.advance()
 
           while self.index < self.input.length() && is_digit(self.input[self.index]) {
-            n *= 10
-            n += parse_digit(self.input[self.index])
+            let digit = parse_digit(self.input[self.index])
+            // Reject literals that do not fit instead of silently wrapping
+            // (e.g. `Type 4294967301` must not be read as `Type 5`).
+            if n > (@uint.MAX_VALUE - digit) / 10 {
+              return Grr(NumberTooLarge(index=start))
+            }
+            n = n * 10 + digit
             self.advance()
           }
 

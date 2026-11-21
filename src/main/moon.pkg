@@ -1,9 +1,7 @@
 import {
-    "nathsou/yolk/lib",
-    "moonbitlang/x/fs",
-    "moonbitlang/x/sys",
+  "nathsou/yolk/lib",
+  "moonbitlang/x/fs",
+  "moonbitlang/x/sys",
 }
 
-options(
-    "is_main": true,
-)
+pkgtype(kind: "executable")

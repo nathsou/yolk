@@ -73,6 +73,29 @@ pub fn Elaborator::run_command(self: Elaborator, name: String, args: Array[STerm
   }
 }
 
+// Expected types steer elaboration through whnf and definitional equality,
+// which the kernel only guarantees to terminate on well-typed terms. Validate an
+// annotation before relying on it. Terms that still mention a variable bound by
+// an enclosing, unopened binder cannot be checked in isolation; the kernel
+// checks them when the enclosing declaration is added.
+fn Elaborator::ensure_type(self: Elaborator, ty: Term) -> Unit raise {
+  if !ty.is_locally_closed() {
+    return
+  }
+  match self.ctx.whnf(self.ctx.infer(ty)) {
+    Sort(_) => ()
+    s => raise TypeCheckError::TypeError(ty, "Expected a type, got a term of type '\{s}'")
+  }
+}
+
+// Validate a motive against its expected type before it is substituted into
+// the minor premise types, under the same condition as `ensure_type`.
+fn Elaborator::ensure_has_type(self: Elaborator, term: Term, ty: Term) -> Unit raise {
+  if term.is_locally_closed() && ty.is_locally_closed() {
+    self.ctx.check(term, ty)
+  }
+}
+
 pub fn Elaborator::elaborate_decl(self: Elaborator, name: Name, uvs: Array[UniverseVar], decl: Decl[STerm]) -> Unit raise {
   match decl {
     Axiom(ty) => {
@@ -81,11 +104,13 @@ pub fn Elaborator::elaborate_decl(self: Elaborator, name: Name, uvs: Array[Unive
     }
     Definition(ty, body) => {
       let ty_elab = self.elaborate_term(ty)
+      self.ensure_type(ty_elab)
       let body_elab = self.elaborate_term_check(body, ty_elab)
       self.ctx.add_decl(name, uvs, Definition(ty_elab, body_elab))
     }
     Theorem(ty, proof) => {
       let ty_elab = self.elaborate_term(ty)
+      self.ensure_type(ty_elab)
       let proof_elab = self.elaborate_term_check(proof, ty_elab)
       self.ctx.add_decl(name, uvs, Theorem(ty_elab, proof_elab))
     }
@@ -189,6 +214,7 @@ pub fn Elaborator::elaborate_term(self: Elaborator, term: STerm) -> Term raise {
     Let(x, ann, val, body) => {
       let val_elab = if ann is Some(ty) {
         let ty_elab = self.elaborate_term(ty)
+        self.ensure_type(ty_elab)
         Term::Ann(self.elaborate_term_check(val, ty_elab), ty_elab)
       } else {
         self.elaborate_term(val)
@@ -201,6 +227,7 @@ pub fn Elaborator::elaborate_term(self: Elaborator, term: STerm) -> Term raise {
     }
     Ann(e, ty) => {
       let ty_elab = self.elaborate_term(ty)
+      self.ensure_type(ty_elab)
       let e_elab = self.elaborate_term_check(e, ty_elab)
       Ann(e_elab, ty_elab)
     }
@@ -235,6 +262,7 @@ pub fn Elaborator::elaborate_term_check(self: Elaborator, sterm: STerm, expected
       match self.ctx.whnf(expected_ty) {
         Pi(binder, _domain, codomain) => {
           let ty_elab = self.elaborate_term(ty_s)
+          self.ensure_type(ty_elab)
           let fresh = self.ctx.declare_fresh(ty_elab)
           defer self.ctx.free_vars.remove(fresh)
           let opened_codomain = instantiate_pi(binder, codomain, FreeVar(x, fresh))
@@ -272,6 +300,7 @@ pub fn Elaborator::elaborate_term_check(self: Elaborator, sterm: STerm, expected
     Let(x, ann, val, body) => {
       let val_elab = if ann is Some(ty) {
         let ty_elab = self.elaborate_term(ty)
+        self.ensure_type(ty_elab)
         Term::Ann(self.elaborate_term_check(val, ty_elab), ty_elab)
       } else {
         self.elaborate_term(val)
@@ -334,6 +363,7 @@ fn Elaborator::elaborate_motive_infer(
       Fun(name, annotation, body) => {
         if annotation is Some(annotation) {
           let annotation = self.elaborate_term(annotation)
+          self.ensure_type(annotation)
           if !self.ctx.is_def_eq(annotation, domain) {
             raise ElaborationError::Message(
               "Motive argument '\{name}' has type '\{annotation}', expected '\{domain}'",
@@ -545,6 +575,8 @@ fn Elaborator::elaborate_match(
       self.elaborate_term_check(wrapped, motive_ty)
     }
   }
+
+  self.ensure_has_type(motive_elab, motive_ty)
 
   // Apply the motive.
   match partial_ty {

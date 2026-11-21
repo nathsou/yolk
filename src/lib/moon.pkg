@@ -1,8 +1,8 @@
 import {
-    "moonbitlang/core/uint",
-    "moonbitlang/core/set",
+  "moonbitlang/core/uint",
+  "moonbitlang/core/set",
 }
 
 options(
-    "is_main": false,
+  is_main: false,
 )

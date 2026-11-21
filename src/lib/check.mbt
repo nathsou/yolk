@@ -223,7 +223,10 @@ pub fn Context::add_decl(self: Context, name: Name, uvs: Array[UniverseVar], dec
             param_binders.push((x, a))
             arity = b
           }
-          _ => raise TypeError(ind.ty, "Inductive parameters must have named binders")
+          Pi(None, _, _) =>
+            raise TypeError(ind.ty, "Inductive parameters must have named binders")
+          _ =>
+            raise TypeError(ind.ty, "Inductive type has fewer binders than its \{ind.params.length()} parameters")
         }
       }
       // Retain canonical parameter metadata derived from the checked arity.
@@ -233,6 +236,9 @@ pub fn Context::add_decl(self: Context, name: Name, uvs: Array[UniverseVar], dec
         ty: ind.ty,
       }
       staged.env.add(name, uvs, Inductive(ind))
+      // Every constructor is checked with only the inductive type in scope,
+      // as in Lean: a constructor's type may not mention a sibling constructor.
+      let ctor_decls: Array[(Name, Decl[Term])] = []
       for entry in ind.constructors {
         let (ctor, body) = entry
         let mut ty = body
@@ -242,7 +248,11 @@ pub fn Context::add_decl(self: Context, name: Name, uvs: Array[UniverseVar], dec
         }
         let ctor_decl = Constructor(ind~, ty~)
         staged.check_decl(Path(name, ctor), uvs, ctor_decl)
-        staged.env.add(Path(name, ctor), uvs, ctor_decl)
+        ctor_decls.push((Path(name, ctor), ctor_decl))
+      }
+      for entry in ctor_decls {
+        let (ctor_name, ctor_decl) = entry
+        staged.env.add(ctor_name, uvs, ctor_decl)
       }
       staged.generate_recursor(name, uvs, ind)
       for key, value in staged.env.decls { self.env.decls[key] = value }
@@ -761,10 +771,16 @@ fn Context::is_strictly_positive(
   if !const_occurs_in(inductive_type_name, ty) { return true }
   match ty {
     Pi(x, a, b) => {
-      // Normalize the domain too: negative occurrences can hide behind beta,
-      // delta, zeta, or annotations. Nested recursive type constructors are not
-      // supported by this kernel and must not be silently accepted.
-      if const_occurs_in(inductive_type_name, self.normalise(a)) { return false }
+      // The domain must not mention the inductive. No declaration in the
+      // environment can refer to the inductive being declared, so reduction
+      // never introduces an occurrence: a syntactically absent inductive stays
+      // absent, and only a syntactic occurrence needs normalizing to see whether
+      // it reduces away. Nested recursive type constructors are not supported
+      // by this kernel and must not be silently accepted.
+      if const_occurs_in(inductive_type_name, a) &&
+        const_occurs_in(inductive_type_name, self.normalise(a)) {
+        return false
+      }
       let fresh = self.declare_fresh(a)
       defer self.free_vars.remove(fresh)
       let body = instantiate_pi(x, b, FreeVar("_", fresh))
@@ -996,6 +1012,14 @@ fn Context::try_iota_reduce(self: Context, head: Term, args: ArrayView[Term]) ->
   }
 
   let rule = rules[rule_index]
+
+  // Only a constructor applied to exactly its parameters and fields is a
+  // value. A partial application (possible in terms the elaborator reduces
+  // before the kernel has checked them) must stay stuck rather than index
+  // past the available arguments.
+  if ctor_args.length() != num_params + rule.num_fields {
+    return None
+  }
 
   // Extract constructor fields (skip params)
   let fields = ctor_args[num_params:]
@@ -1252,6 +1276,18 @@ pub fn Context::check(self: Context, term: Term, ty: Term) -> Unit raise TypeChe
   }
 }
 
+// Compare the lambda `lam` with the non-lambda `other` by eta-expanding `other`.
+fn Context::is_def_eq_eta(self: Context, lam: Term, other: Term) -> Bool raise TypeCheckError {
+  match self.whnf(self.infer(other)) {
+    // `other` is locally closed, so it stays valid under the new binder.
+    Pi(x, domain, _) => {
+      let name = match x { Some(x) => x; None => "x" }
+      self.is_def_eq(lam, Lam(name, domain, App(other, BoundVar(0))))
+    }
+    _ => false
+  }
+}
+
 // Definitional equality check with interleaved WHNF reduction.
 // Only reduces as much as needed to determine equality, avoiding full normalisation
 // see https://github.com/digama0/lean-type-theory section 2.2 (Definitional Equality)
@@ -1284,19 +1320,12 @@ fn Context::is_def_eq(self: Context, t1: Term, t2: Term) -> Bool raise TypeCheck
       self.is_def_eq(open(b1, 0, x, fresh), open(b2, 0, x, fresh))
     }
 
-    // η-expansion (left): Γ ⊢ e : ∀y:α.β → Γ ⊢ λx:α. e x ≡ e
-    (Lam(x, a, b), _) => {
-      let fresh = self.declare_fresh(a)
-      defer self.free_vars.remove(fresh)
-      self.is_def_eq(open(b, 0, x, fresh), App(w2, FreeVar(x, fresh)))
-    }
-
-    // η-expansion (right)
-    (_, Lam(x, a, b)) => {
-      let fresh = self.declare_fresh(a)
-      defer self.free_vars.remove(fresh)
-      self.is_def_eq(App(w1, FreeVar(x, fresh)), open(b, 0, x, fresh))
-    }
+    // η-expansion: Γ ⊢ e : ∀y:α.β → Γ ⊢ λy:α. e y ≡ e
+    // As in Lean, expand only a term whose type is a product, and compare the
+    // expansion through lambda congruence so the binder domains are compared
+    // too. Applying a non-function would be ill-typed and make inference fail.
+    (Lam(_), _) => self.is_def_eq_eta(w1, w2)
+    (_, Lam(_)) => self.is_def_eq_eta(w2, w1)
 
     // Γ ⊢ α ≡ α', Γ,x:α ⊢ e ≡ e' → Γ ⊢ Πx:α.e ≡ Πx:α'.e'
     (Pi(x1, a1, b1), Pi(x2, a2, b2)) => {

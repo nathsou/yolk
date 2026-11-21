@@ -414,3 +414,126 @@ test "reject the inductive in its constructor result indices" {
     ),
   )
 }
+
+///|
+test "iota reduction ignores partially applied constructors" {
+  // The elaborator reduces a declaration's type while elaborating its body;
+  // a partially applied constructor as major premise used to index past its
+  // arguments and abort the process.
+  let ctx = Context::new()
+  let stuck = mk_app(Const(Path(Leaf("Nat"), "rec"), [Level::from(2)]), [
+    Term::Lam("_", Const(Leaf("Nat"), []), Sort(Level::from(1))),
+    Const(Leaf("Nat"), []),
+    Lam("_", Const(Leaf("Nat"), []), Lam("_", Sort(Level::from(1)), Const(Leaf("Nat"), []))),
+    Const(Path(Leaf("Nat"), "succ"), []),
+  ].iter())
+  assert_true(ctx.whnf(stuck).is_alpha_eq(stuck))
+  assert_kernel_rejects(
+    "def bad : Nat.rec.{2} (fun _ => Type) Nat (fun _ _ => Nat) Nat.succ := fun x => x",
+  )
+  assert_kernel_rejects(
+    "#check (fun (x : Nat) => x : Nat.rec.{2} (fun _ => Type) Nat (fun _ _ => Nat) Nat.succ)",
+  )
+}
+
+///|
+test "elaboration validates annotations before reducing them" {
+  // Each annotation is ill typed and has no normal form. Reducing it before
+  // checking it would not terminate.
+  let omega = "(fun (x : Nat -> Nat) => x x) (fun (x : Nat -> Nat) => x x)"
+  for
+    program in [
+      "def bad : \{omega} := fun y => y", "#check (fun (y : Nat) => y : \{omega})",
+      "#check let f : \{omega} := fun y => y in f", "#check fun (n : Nat) => (fun y => y : \{omega})",
+      (
+        #|def bad (n : Nat) : Nat :=
+        #|  match n return (fun (_ : Nat) =>
+      ) +
+      omega +
+      (
+        #|)
+        #|    | zero => fun y => y
+        #|    | succ m ih => fun y => y
+      ),
+    ] {
+    assert_kernel_rejects(program)
+  }
+}
+
+///|
+test "constructors are checked without their sibling constructors" {
+  let ctx = Context::new()
+  let t = Term::Const(Leaf("T"), [])
+  let nat = Term::Const(Leaf("Nat"), [])
+  // b : (let y := T.a in Nat) -> T mentions the earlier constructor T.a.
+  let ind : InductiveDecl[Term] = {
+    params: [],
+    constructors: [
+      ("a", t),
+      ("b", Pi(None, Let("y", Const(Path(Leaf("T"), "a"), []), nat), t)),
+    ],
+    ty: Sort(Level::from(1)),
+  }
+  try ctx.add_decl(Leaf("T"), [], Inductive(ind)) catch {
+    TypeError(_, _) => ()
+    err => fail("Unexpected error: \{err}")
+  } noraise {
+    _ => fail("Accepted a constructor that mentions a sibling constructor")
+  }
+  assert_false(ctx.env.decls.contains(Leaf("T")))
+  // More parameters than the arity has binders is reported as such.
+  let too_many : InductiveDecl[Term] = {
+    params: [("A", Sort(Level::from(1)))],
+    constructors: [],
+    ty: Sort(Level::from(1)),
+  }
+  try ctx.add_decl(Leaf("T"), [], Inductive(too_many)) catch {
+    TypeError(_, msg) => assert_true(msg.contains("fewer binders"), msg~)
+    err => fail("Unexpected error: \{err}")
+  } noraise {
+    _ => fail("Accepted an inductive with more parameters than binders")
+  }
+}
+
+///|
+test "eta expansion compares domains and requires a function" {
+  let ctx = Context::new()
+  let nat = Term::Const(Leaf("Nat"), [])
+  let bool = Term::Const(Leaf("Bool"), [])
+  let identity = Term::Lam("x", nat, BoundVar(0))
+  // A non-function is never an eta expansion; this used to raise.
+  assert_false(ctx.is_def_eq(Const(Leaf("true"), []), identity))
+  assert_false(ctx.is_def_eq(identity, Const(Leaf("true"), [])))
+  let f_id = ctx.declare_fresh(Pi(None, nat, nat))
+  defer ctx.free_vars.remove(f_id)
+  let f = Term::FreeVar("f", f_id)
+  assert_true(ctx.is_def_eq(Lam("x", nat, App(f, BoundVar(0))), f))
+  assert_true(ctx.is_def_eq(f, Lam("x", nat, App(f, BoundVar(0)))))
+  // The expansion of f : Nat -> Nat binds a Nat, not a Bool.
+  assert_false(ctx.is_def_eq(Lam("x", bool, App(f, BoundVar(0))), f))
+  assert_ok(
+    "theorem eta (f : Nat -> Nat) : Eq (Nat -> Nat) (fun x => f x) f := Eq.refl (Nat -> Nat) f",
+  )
+}
+
+///|
+test "positivity normalizes only domains that mention the inductive" {
+  // An occurrence that reduces away is not an occurrence.
+  assert_ok(
+    "inductive T : Type | leaf : T | mk : ((fun (_ : Type) => Nat) T -> T) -> T",
+  )
+  assert_kernel_rejects(
+    "inductive T : Type | leaf : T | mk : ((fun (A : Type) => A) T -> T) -> T",
+  )
+}
+
+///|
+test "numeric literals that overflow are rejected" {
+  try Lexer::new("Type 4294967301").tokenise() catch {
+    NumberTooLarge(index=5) => ()
+    err => fail("Unexpected error: \{err}")
+  } noraise {
+    tokens => fail("Accepted an overflowing literal: \{tokens}")
+  }
+  assert_true(Lexer::new("4294967295").tokenise() == [Nat(4294967295)])
+}
